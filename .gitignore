@@ -1,3 +1,7 @@
 exported_onnx/
 dataset/
 ids.txt
+.python-version
+main.py
+# pyproject.toml
+uv.lock

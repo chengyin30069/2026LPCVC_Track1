@@ -54,6 +54,21 @@ Ensure you have Python 3.9+ installed. Install the required Python packages:
 pip install -r requirements.txt
 ```
 
+## uv Installation
+
+### Init
+
+```bash
+uv init --python 3.10
+```
+
+### Package
+
+```bash
+uv add -r requirements.txt --no-build-isolation
+```
+
+
 ---
 
 ## **Usage**
