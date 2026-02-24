@@ -1,6 +1,10 @@
 import torch
 import os
 from qai_hub_models.models.openai_clip.model import OpenAIClip
+import open_clip
+from mobileclip.modules.common.mobileone import reparameterize_model
+from PIL import Image
+
 
 # --- Configuration for File Saving ---
 ONNX_DIR = "exported_onnx"
@@ -16,52 +20,67 @@ print(f"Saving ONNX files to directory: {os.path.abspath(ONNX_DIR)}")
 # -----------------------------
 # 2. Dummy inputs
 # -----------------------------
-DUMMY_IMAGE_INPUT = torch.rand(1, 3, 224, 224, dtype=torch.float32, device=device)
-DUMMY_TEXT_INPUT = torch.randint(0, 49408, (1, 77), dtype=torch.int64, device=device)
+DUMMY_IMAGE_INPUT = torch.rand(1, 3, 256, 256, dtype=torch.float32, device=device)
+DUMMY_TEXT_INPUT = torch.randint(0, 49408, (1, 77), dtype=torch.int32, device=device)
 
 # -----------------------------
 # 3. Load OpenAIClip wrapper and define encoders
 # -----------------------------
 print("Loading OpenAIClip wrapper model...")
-clip_wrapper_model = OpenAIClip.from_pretrained().to(device)
-clip_wrapper_model.eval()
 
-clip_model = clip_wrapper_model.clip.to(device)
-clip_model = clip_model.to(torch.float32) # convert all model params to float32 type, consistent with input type in compiling and profiling via AIHub
+model, _, preprocess = open_clip.create_model_and_transforms('MobileCLIP2-S0', pretrained='./mobileclip2_s0.pt')
+model.to(device)
+tokenizer = open_clip.get_tokenizer('MobileCLIP2-S0')
+model.eval()
+model = reparameterize_model(model)
+clip_model = model.to(torch.float32) # convert all model params to float32 type, consistent with input type in compiling and profiling via AIHub
 clip_model.eval()
+
+# clip_wrapper_model = OpenAIClip.from_pretrained().to(device)
+# clip_wrapper_model.eval()
+
+# clip_model = clip_wrapper_model.clip.to(device)
+# clip_model = clip_model.to(torch.float32) # convert all model params to float32 type, consistent with input type in compiling and profiling via AIHub
+# clip_model.eval()
 
 class ImageEncoderWrapper(torch.nn.Module):
     def __init__(self, clip_model):
         super().__init__()
+        self.preprocess = preprocess
         self.visual = clip_model.visual
 
     def forward(self, images):
+        images = self.preprocess(images)
+        
         return self.visual(images)
 
 class TextEncoderWrapper(torch.nn.Module):
     def __init__(self, clip_model):
         super().__init__()
-        self.token_embedding = clip_model.token_embedding
-        self.positional_embedding = clip_model.positional_embedding
-        self.transformer = clip_model.transformer
-        self.ln_final = clip_model.ln_final
-        self.text_projection = clip_model.text_projection
+        self.text = clip_model.text
 
     def forward(self, token_ids):
-        x = self.token_embedding(token_ids)
-        x = x + self.positional_embedding
-        x = x.permute(1, 0, 2)
-        x = self.transformer(x)
-        x = x.permute(1, 0, 2)
-        x = self.ln_final(x)
-        eos_index = token_ids.argmax(dim=-1)
-        x = x[torch.arange(x.shape[0]), eos_index]
-        x = x @ self.text_projection
+        is_eot = (token_ids == 49407)
+        eot_cumsum = torch.cumsum(is_eot.long(), dim=1)
+        is_extra_padding = is_eot & (eot_cumsum > 1)
+        corrected_tokens = torch.where(
+            is_extra_padding,
+            torch.tensor(0, device=token_ids.device, dtype=token_ids.dtype),
+            token_ids
+        )
+        x = self.text(corrected_tokens)
+        # x = self.transformer(x)
+        # x = x.permute(1, 0, 2)
+        # x = self.ln_final(x)
+        # eos_index = token_ids.argmax(dim=-1)
+        # x = x[torch.arange(x.shape[0]), eos_index]
+        # x = x @ self.text_projection
         return x
 
 # -----------------------------
 # 4. Create wrapper instances
 # -----------------------------
+
 image_encoder = ImageEncoderWrapper(clip_model)
 text_encoder = TextEncoderWrapper(clip_model)
 image_encoder.eval()

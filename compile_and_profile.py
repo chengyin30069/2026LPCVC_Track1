@@ -22,7 +22,7 @@ def compile_model(model, device, input_specs):
         model=model,
         device=device,
         input_specs=input_specs,
-        options="--target_runtime precompiled_qnn_onnx --truncate_64bit_io"
+        options="--target_runtime qnn_dlc --truncate_64bit_io"
     )
     return compile_job.job_id
 
@@ -66,12 +66,12 @@ print("\nSubmitting compilation jobs to QAI Hub...")
 img_id = compile_model(
     model=onnx_img_model, 
     device=target_device, 
-    input_specs={"image": (1, 3, 224, 224)}
+    input_specs={"image": (1, 3, 256, 256)}
 )
 txt_id = compile_model(
     model=onnx_txt_model, 
     device=target_device, 
-    input_specs={"text": ((1, 77), "int64")}
+    input_specs={"text": ((1, 77), "int32")}
 )
 
 print(f"Image compilation job ID: {img_id}")
