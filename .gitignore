@@ -3,6 +3,9 @@ dataset/
 ids.txt
 .python-version
 main.py
+
+mobileclip2_s0.pt
+
 # pyproject.toml
 uv.lock
 # Byte-compiled / optimized / DLL files

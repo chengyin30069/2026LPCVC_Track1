@@ -46,11 +46,9 @@ clip_model.eval()
 class ImageEncoderWrapper(torch.nn.Module):
     def __init__(self, clip_model):
         super().__init__()
-        self.preprocess = preprocess
         self.visual = clip_model.visual
 
     def forward(self, images):
-        images = self.preprocess(images)
         
         return self.visual(images)
 
@@ -65,7 +63,7 @@ class TextEncoderWrapper(torch.nn.Module):
         is_extra_padding = is_eot & (eot_cumsum > 1)
         corrected_tokens = torch.where(
             is_extra_padding,
-            torch.tensor(0, device=token_ids.device, dtype=token_ids.dtype),
+            torch.zeros(77, device=token_ids.device, dtype=token_ids.dtype),
             token_ids
         )
         x = self.text(corrected_tokens)
