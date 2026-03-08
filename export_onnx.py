@@ -1,6 +1,9 @@
 import torch
 import os
 from qai_hub_models.models.openai_clip.model import OpenAIClip
+import torch.nn as nn
+
+from transformers import CLIPProcessor, CLIPTokenizer, CLIPModel
 
 # --- Configuration for File Saving ---
 ONNX_DIR = "exported_onnx"
@@ -17,53 +20,49 @@ print(f"Saving ONNX files to directory: {os.path.abspath(ONNX_DIR)}")
 # 2. Dummy inputs
 # -----------------------------
 DUMMY_IMAGE_INPUT = torch.rand(1, 3, 224, 224, dtype=torch.float32, device=device)
-DUMMY_TEXT_INPUT = torch.randint(0, 49408, (1, 77), dtype=torch.int64, device=device)
+DUMMY_TEXT_INPUT = torch.randint(0, 49408, (1, 77), dtype=torch.int32, device=device)
 
 # -----------------------------
 # 3. Load OpenAIClip wrapper and define encoders
 # -----------------------------
 print("Loading OpenAIClip wrapper model...")
-clip_wrapper_model = OpenAIClip.from_pretrained().to(device)
-clip_wrapper_model.eval()
 
-clip_model = clip_wrapper_model.clip.to(device)
-clip_model = clip_model.to(torch.float32) # convert all model params to float32 type, consistent with input type in compiling and profiling via AIHub
-clip_model.eval()
 
-class ImageEncoderWrapper(torch.nn.Module):
-    def __init__(self, clip_model):
+class TextEncoder(nn.Module):
+    def __init__(self, model):
         super().__init__()
-        self.visual = clip_model.visual
+        self.text_model = model.text_model
+        self.text_projection = model.text_projection
+    
+    def forward(self, x):
+        output = self.text_model(x)
+        x = output.pooler_output
+        x = self.text_projection(x)
+        x = x / x.norm(dim=-1, keepdim=True)
+        return x
 
-    def forward(self, images):
-        return self.visual(images)
-
-class TextEncoderWrapper(torch.nn.Module):
-    def __init__(self, clip_model):
+class ImageEncoder(nn.Module):
+    def __init__(self, model):
         super().__init__()
-        self.token_embedding = clip_model.token_embedding
-        self.positional_embedding = clip_model.positional_embedding
-        self.transformer = clip_model.transformer
-        self.ln_final = clip_model.ln_final
-        self.text_projection = clip_model.text_projection
-
-    def forward(self, token_ids):
-        x = self.token_embedding(token_ids)
-        x = x + self.positional_embedding
-        x = x.permute(1, 0, 2)
-        x = self.transformer(x)
-        x = x.permute(1, 0, 2)
-        x = self.ln_final(x)
-        eos_index = token_ids.argmax(dim=-1)
-        x = x[torch.arange(x.shape[0]), eos_index]
-        x = x @ self.text_projection
+        self.vision_model = model.vision_model
+        self.visual_projection = model.visual_projection
+    
+    def forward(self, x):
+        output = self.vision_model(x)
+        x = output.pooler_output
+        x = self.visual_projection(x)
+        x = x / x.norm(dim=-1, keepdim=True)
         return x
 
 # -----------------------------
 # 4. Create wrapper instances
 # -----------------------------
-image_encoder = ImageEncoderWrapper(clip_model)
-text_encoder = TextEncoderWrapper(clip_model)
+
+
+model = CLIPModel.from_pretrained("wkcn/TinyCLIP-ViT-61M-32-Text-29M-LAION400M")
+
+image_encoder = ImageEncoder(model).eval()
+text_encoder = TextEncoder(model).eval()
 image_encoder.eval()
 text_encoder.eval()
 
