@@ -24,6 +24,7 @@ def compile_model(model, device, input_specs):
         input_specs=input_specs,
         options="--target_runtime precompiled_qnn_onnx --truncate_64bit_io"
     )
+    compile_jog.modify_sharing(add_emails=['lowpowervision@gmail.com'])
     return compile_job.job_id
 
 # Construct the full paths
