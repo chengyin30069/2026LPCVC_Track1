@@ -72,8 +72,8 @@ txt_id = compile_model(
     model=onnx_txt_model, 
     device=target_device, 
     input_specs={
-        "text": ((1, 77), "int64"),
-        "attention_mask": ((1, 77), "int64"),
+        "text": ((1, 77), "int32"),
+        "attention_mask": ((1, 77), "int32"),
     }
 )
 

@@ -59,8 +59,8 @@ for prompt in prompts:
         max_length=77,
         return_tensors="pt"
     )
-    tokens = encoded["input_ids"].to(torch.int64)
-    mask = encoded["attention_mask"].to(torch.int64)
+    tokens = encoded["input_ids"].to(torch.int32)
+    mask = encoded["attention_mask"].to(torch.int32)
     tokenized_texts.append(tokens.numpy())
     attention_masks.append(mask.numpy())
 

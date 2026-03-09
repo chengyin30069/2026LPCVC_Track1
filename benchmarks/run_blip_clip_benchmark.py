@@ -27,47 +27,58 @@ def ensure_clip_benchmark(repo_dir: Path):
 def write_custom_loader(repo_dir: Path):
     loader_path = repo_dir / "clip_benchmark" / "models" / "blip_clip_tokenizer.py"
     loader_content = '''import torch
-from transformers import BlipImageProcessor, BlipModel, CLIPTokenizer
+from transformers import BlipImageProcessor, BlipModel, CLIPTokenizer, AutoTokenizer
 
 
 class BlipClipTokenizerWrapper(torch.nn.Module):
     def __init__(self, blip_model):
         super().__init__()
         self.blip_model = blip_model
-        self.vocab_size = blip_model.text_model.config.vocab_size
         self.logit_scale = torch.nn.Parameter(torch.ones([]) * torch.log(torch.tensor(1 / 0.07)))
 
     def encode_image(self, images):
         return self.blip_model.get_image_features(pixel_values=images)
 
     def encode_text(self, tokenized_texts):
-        input_ids = tokenized_texts["input_ids"].to(torch.int64)
+        input_ids = tokenized_texts["input_ids"].to(torch.int32)
         attention_mask = tokenized_texts.get("attention_mask")
         if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+            attention_mask = torch.ones_like(input_ids, dtype=torch.int32)
         else:
-            attention_mask = attention_mask.to(torch.int64)
+            attention_mask = attention_mask.to(torch.int32)
 
-        mapped_ids = torch.remainder(input_ids, self.vocab_size)
-        return self.blip_model.get_text_features(input_ids=mapped_ids, attention_mask=attention_mask)
+        return self.blip_model.get_text_features(input_ids=input_ids, attention_mask=attention_mask)
 
 
 class ClipTokenizerForBlip:
-    def __init__(self, tokenizer_name, max_length, vocab_size):
-        self.tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name)
+    def __init__(self, tokenizer_name, blip_model_name, max_length):
+        self.clip_tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name)
+        self.blip_tokenizer = AutoTokenizer.from_pretrained(blip_model_name)
         self.max_length = max_length
-        self.vocab_size = vocab_size
 
     def __call__(self, texts):
-        encoded = self.tokenizer(
+        clip_encoded = self.clip_tokenizer(
             texts,
             padding="max_length",
             truncation=True,
             max_length=self.max_length,
             return_tensors="pt",
         )
-        encoded["input_ids"] = torch.remainder(encoded["input_ids"].to(torch.int64), self.vocab_size)
-        encoded["attention_mask"] = encoded["attention_mask"].to(torch.int64)
+
+        recovered_texts = [
+            self.clip_tokenizer.decode(ids, skip_special_tokens=True)
+            for ids in clip_encoded["input_ids"]
+        ]
+
+        encoded = self.blip_tokenizer(
+            recovered_texts,
+            padding="max_length",
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        encoded["input_ids"] = encoded["input_ids"].to(torch.int32)
+        encoded["attention_mask"] = encoded["attention_mask"].to(torch.int32)
         return encoded
 
 
@@ -88,8 +99,8 @@ def load_blip_clip_tokenizer(model_name, pretrained, cache_dir, device, jit=Fals
     transform = _transform_from_processor(processor)
     tokenizer = ClipTokenizerForBlip(
         tokenizer_name="openai/clip-vit-base-patch32",
+        blip_model_name=model_id,
         max_length=77,
-        vocab_size=blip_model.text_model.config.vocab_size,
     )
     return model, transform, tokenizer
 '''
