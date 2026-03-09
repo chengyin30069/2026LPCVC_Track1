@@ -6,10 +6,14 @@ import os
 import qai_hub
 from PIL import Image
 
+BLIP_IMAGE_MEAN = np.array([0.48145466, 0.4578275, 0.40821073], dtype=np.float32)
+BLIP_IMAGE_STD = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
+
 def process_image(image_path, target_size=(224, 224)):
     """Loads and processes an image to the required input shape (C, H, W)."""
     image = Image.open(image_path).convert('RGB').resize(target_size)
-    image_array = np.array(image, dtype=np.float32) / 255.0  # Normalize
+    image_array = np.array(image, dtype=np.float32) / 255.0
+    image_array = (image_array - BLIP_IMAGE_MEAN) / BLIP_IMAGE_STD
     return np.transpose(image_array, (2, 0, 1))[np.newaxis, :]  # Convert to (1, C, H, W)
 
 def load_images_from_folder(folder_path, target_size=(224, 224)):
@@ -44,20 +48,25 @@ prompts = df.iloc[:, 1].dropna().tolist()
 # Load CLIP tokenizer
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 
-# Tokenize prompts into numpy arrays of shape (1, 77) and dtype int32
+# Tokenize prompts into numpy arrays of shape (1, 77) and dtype int64
 tokenized_texts = []
+attention_masks = []
 for prompt in prompts:
-    tokens = tokenizer(
+    encoded = tokenizer(
         prompt,
         padding="max_length",
         truncation=True,
         max_length=77,
         return_tensors="pt"
-    )["input_ids"].to(torch.int32)  # torch tensor [1, 77], int32
-    tokenized_texts.append(tokens.numpy())  # convert to numpy array
+    )
+    tokens = encoded["input_ids"].to(torch.int64)
+    mask = encoded["attention_mask"].to(torch.int64)
+    tokenized_texts.append(tokens.numpy())
+    attention_masks.append(mask.numpy())
 
 # Example: check first element
 print(tokenized_texts[0].shape)  # (1, 77)
-print(tokenized_texts[0].dtype)  # int32
+print(tokenized_texts[0].dtype)  # int64
+print(attention_masks[0].dtype)  # int64
 
-print(qai_hub.upload_dataset({"text": tokenized_texts}))
+print(qai_hub.upload_dataset({"text": tokenized_texts, "attention_mask": attention_masks}))

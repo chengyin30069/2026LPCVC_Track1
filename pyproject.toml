@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "clip",
+    "clip-benchmark>=1.6.2",
     "numpy>=2.2.6",
     "onnxscript>=0.6.2",
     "pandas>=2.2.3",
@@ -16,6 +16,3 @@ dependencies = [
     "torch>=2.8.0",
     "transformers>=4.57.6",
 ]
-
-[tool.uv.sources]
-clip = { git = "https://github.com/openai/CLIP.git", rev = "dcba3cb2e2827b402d2701e7e1c7d9fed8a20ef1" }

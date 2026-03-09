@@ -6,7 +6,7 @@ Check out [this repo](https://github.com/lpcvai/25LPCVC_AIHub_Guide) for more de
 
 ## Overview
 
-This repository contains Python scripts designed to extract, compile, and profile the OpenAI-CLIP's image and text encoders using the `qai_hub` library. It also includes scripts for uploading datasets and running inference with evaluation metrics such as Recall@10.
+This repository contains Python scripts designed to extract, compile, and profile BLIP image and text encoders using the `qai_hub` library. It also includes scripts for uploading datasets and running inference with evaluation metrics such as Recall@10.
 
 ## **Table of Contents**
 
@@ -20,11 +20,13 @@ This repository contains Python scripts designed to extract, compile, and profil
 ## **Features**
 
 * **Preprocessing Scripts**: Includes resizing and normalization for image inputs, and tokenization for text inputs.
-* Extract CLIP Encoders: Extract image and text encoders from OpenAI-CLIP model and export as ONNX models.
+* Extract BLIP Encoders: Extract image and text encoders from `Salesforce/blip-itm-base-coco` and export as ONNX models.
+* Keep `openai-clip` Tokenizer: Text is tokenized with `openai/clip-vit-base-patch32` and remapped to BLIP vocabulary for compatibility.
 * **Model Compilation**: Supports compiling the model for a specific target device using QAI Hub.
 * **Model Profiling**: Submit and retrieve profiling results via QAI Hub.
 * **Dataset Upload**: Upload image and text datasets to AI Hub for inference.
 * **Inference & Evaluation**: Run inference on datasets and compute metrics such as Recall@10.
+* **CLIP_benchmark Integration**: Run a local CLIP_benchmark test for BLIP inference-time measurement.
 
 ---
 
@@ -96,7 +98,7 @@ This script will:
 
 Before running inference, datasets must be uploaded to AI Hub using `upload_dataset.py`. This script handles:
 
-* Formatting images and text data into the structure expected by QAI Hub. (image: (1,3,224,224), txt: (1,77))
+* Formatting images and text data into the structure expected by QAI Hub. (image: (1,3,224,224), txt: (1,77), attention_mask: (1,77))
 * Uploading the dataset and returning a dataset ID to be used in inference scripts.
 
 ```bash
@@ -119,3 +121,18 @@ python inference.py
 ```
 
 After completion, the script prints the Recall@10 score for the dataset.
+
+### **5. Run CLIP_benchmark Timing for BLIP**
+
+This script sets up a local `CLIP_benchmark` checkout, registers a custom model loader for BLIP + `openai-clip` tokenizer compatibility, and records total benchmark runtime.
+
+```bash
+python benchmarks/run_blip_clip_benchmark.py --dataset cifar10 --task zeroshot_classification --batch_size 16
+```
+
+Outputs:
+
+* `benchmark_results/clip_benchmark_blip_result.json`: benchmark metrics output.
+* `benchmark_results/clip_benchmark_blip_timing.json`: elapsed-time summary for the run.
+
+> Note: BLIP is not natively trained with the `openai-clip` tokenizer. This repo preserves the tokenizer requirement via ID remapping, which can affect retrieval quality.

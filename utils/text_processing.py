@@ -13,21 +13,26 @@ prompts = df.iloc[:, 1].dropna().tolist()
 # Load CLIP tokenizer
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 
-# Tokenize prompts into numpy arrays of shape (1, 77) and dtype int32
+# Tokenize prompts into numpy arrays of shape (1, 77) and dtype int64
 tokenized_texts = []
+attention_masks = []
 for prompt in prompts:
-    tokens = tokenizer(
+    encoded = tokenizer(
         prompt,
         padding="max_length",
         truncation=True,
         max_length=77,
         return_tensors="pt"
-    )["input_ids"].to(torch.int32)  # torch tensor [1, 77], int32
-    tokenized_texts.append(tokens.numpy())  # convert to numpy array
+    )
+    tokens = encoded["input_ids"].to(torch.int64)
+    mask = encoded["attention_mask"].to(torch.int64)
+    tokenized_texts.append(tokens.numpy())
+    attention_masks.append(mask.numpy())
 
 # Example: check first element
 print(tokenized_texts[0].shape)  # (1, 77)
-print(tokenized_texts[0].dtype)  # int32
+print(tokenized_texts[0].dtype)  # int64
+print(attention_masks[0].dtype)  # int64
 
 # Optional: check total number of prompts
 print(len(tokenized_texts))  # batch size

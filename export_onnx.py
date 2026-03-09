@@ -1,9 +1,10 @@
 import torch
 import os
-from qai_hub_models.models.openai_clip.model import OpenAIClip
+from transformers import BlipModel
 
 # --- Configuration for File Saving ---
 ONNX_DIR = "exported_onnx"
+BLIP_MODEL_NAME = "Salesforce/blip-itm-base-coco"
 device = torch.device("cpu") # use CPU to export onnx model to avoid GPU device issues
 # -----------------------------------
 
@@ -18,52 +19,43 @@ print(f"Saving ONNX files to directory: {os.path.abspath(ONNX_DIR)}")
 # -----------------------------
 DUMMY_IMAGE_INPUT = torch.rand(1, 3, 224, 224, dtype=torch.float32, device=device)
 DUMMY_TEXT_INPUT = torch.randint(0, 49408, (1, 77), dtype=torch.int64, device=device)
+DUMMY_ATTENTION_MASK = torch.ones((1, 77), dtype=torch.int64, device=device)
 
 # -----------------------------
-# 3. Load OpenAIClip wrapper and define encoders
+# 3. Load BLIP wrapper and define encoders
 # -----------------------------
-print("Loading OpenAIClip wrapper model...")
-clip_wrapper_model = OpenAIClip.from_pretrained().to(device)
-clip_wrapper_model.eval()
-
-clip_model = clip_wrapper_model.clip.to(device)
-clip_model = clip_model.to(torch.float32) # convert all model params to float32 type, consistent with input type in compiling and profiling via AIHub
-clip_model.eval()
+print(f"Loading BLIP model: {BLIP_MODEL_NAME}...")
+blip_model = BlipModel.from_pretrained(BLIP_MODEL_NAME).to(device)
+blip_model = blip_model.to(torch.float32)
+blip_model.eval()
 
 class ImageEncoderWrapper(torch.nn.Module):
-    def __init__(self, clip_model):
+    def __init__(self, blip_model):
         super().__init__()
-        self.visual = clip_model.visual
+        self.blip = blip_model
 
     def forward(self, images):
-        return self.visual(images)
+        return self.blip.get_image_features(pixel_values=images)
 
 class TextEncoderWrapper(torch.nn.Module):
-    def __init__(self, clip_model):
+    def __init__(self, blip_model):
         super().__init__()
-        self.token_embedding = clip_model.token_embedding
-        self.positional_embedding = clip_model.positional_embedding
-        self.transformer = clip_model.transformer
-        self.ln_final = clip_model.ln_final
-        self.text_projection = clip_model.text_projection
+        self.blip = blip_model
+        self.vocab_size = blip_model.text_model.config.vocab_size
 
-    def forward(self, token_ids):
-        x = self.token_embedding(token_ids)
-        x = x + self.positional_embedding
-        x = x.permute(1, 0, 2)
-        x = self.transformer(x)
-        x = x.permute(1, 0, 2)
-        x = self.ln_final(x)
-        eos_index = token_ids.argmax(dim=-1)
-        x = x[torch.arange(x.shape[0]), eos_index]
-        x = x @ self.text_projection
-        return x
+    def forward(self, token_ids, attention_mask):
+        mapped_token_ids = torch.remainder(token_ids.to(torch.int64), self.vocab_size)
+        mapped_attention_mask = attention_mask.to(torch.int64)
+        return self.blip.get_text_features(
+            input_ids=mapped_token_ids,
+            attention_mask=mapped_attention_mask,
+        )
 
 # -----------------------------
 # 4. Create wrapper instances
 # -----------------------------
-image_encoder = ImageEncoderWrapper(clip_model)
-text_encoder = TextEncoderWrapper(clip_model)
+image_encoder = ImageEncoderWrapper(blip_model)
+text_encoder = TextEncoderWrapper(blip_model)
 image_encoder.eval()
 text_encoder.eval()
 
@@ -97,9 +89,9 @@ print(f"\nExporting Text Encoder to {text_onnx_path}...")
 
 torch.onnx.export(
     text_encoder,
-    DUMMY_TEXT_INPUT,
+    (DUMMY_TEXT_INPUT, DUMMY_ATTENTION_MASK),
     text_onnx_path,
-    input_names=["text"],
+    input_names=["text", "attention_mask"],
     output_names=["text_embedding"],
     opset_version=18,
     do_constant_folding=True,

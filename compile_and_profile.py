@@ -71,7 +71,10 @@ img_id = compile_model(
 txt_id = compile_model(
     model=onnx_txt_model, 
     device=target_device, 
-    input_specs={"text": ((1, 77), "int64")}
+    input_specs={
+        "text": ((1, 77), "int64"),
+        "attention_mask": ((1, 77), "int64"),
+    }
 )
 
 print(f"Image compilation job ID: {img_id}")
