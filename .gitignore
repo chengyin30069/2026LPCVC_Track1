@@ -5,3 +5,9 @@ ids.txt
 main.py
 # pyproject.toml
 uv.lock
+.venv
+__pycache__
+smoke_raw
+raw_datasets
+dataset_smoke
+artifacts
