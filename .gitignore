@@ -12,3 +12,4 @@ raw_datasets
 dataset_smoke
 artifacts
 coco2017
+inference_dataset

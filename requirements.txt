@@ -8,3 +8,5 @@ pillow
 onnxscript
 tqdm
 setuptools==81.0.0
+qai_hub
+qai_hub_models

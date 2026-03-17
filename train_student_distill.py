@@ -135,6 +135,12 @@ def parse_args() -> argparse.Namespace:
         default="hf-hub:laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K",
     )
     parser.add_argument("--output-dir", default="artifacts/student_distill")
+    parser.add_argument("--resume-checkpoint", help="Optional checkpoint path to continue training from.")
+    parser.add_argument(
+        "--resume-optimizer-state",
+        action="store_true",
+        help="Restore optimizer/scaler states when available in the resume checkpoint.",
+    )
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--grad-accumulation", type=int, default=8)
@@ -195,6 +201,25 @@ def configure_cuda_runtime(*, device: str, allow_tf32: bool) -> None:
         torch.backends.cuda.matmul.allow_tf32 = allow_tf32
     if hasattr(torch.backends.cudnn, "allow_tf32"):
         torch.backends.cudnn.allow_tf32 = allow_tf32
+
+
+def resolve_resume_checkpoint_path(raw_path: str) -> Path:
+    candidate = Path(raw_path)
+    if candidate.exists():
+        return candidate
+
+    if candidate.parent == Path("."):
+        matches = sorted(Path(".").glob(f"**/{candidate.name}"))
+        if len(matches) == 1:
+            print(f"Resolved resume checkpoint '{raw_path}' -> '{matches[0]}'")
+            return matches[0]
+        if len(matches) > 1:
+            display = "\n".join(str(path) for path in matches[:10])
+            raise FileNotFoundError(
+                f"Resume checkpoint '{raw_path}' is ambiguous. Use one of:\n{display}"
+            )
+
+    raise FileNotFoundError(f"Resume checkpoint does not exist: {candidate}")
 
 
 def compute_losses(
@@ -263,21 +288,28 @@ def save_training_checkpoint(
     trainable_modules: list[str],
     args: argparse.Namespace,
     history: list[dict[str, float]],
+    optimizer: torch.optim.Optimizer | None = None,
+    scaler: torch.cuda.amp.GradScaler | None = None,
+    best_total_loss: float | None = None,
     epoch: int | None = None,
 ) -> None:
-    torch.save(
-        {
-            "student_model_id": args.student_model_id,
-            "student_state_dict": student_model.state_dict(),
-            "text_embedding_model_name": text_cache["model_name"],
-            "teacher_model_name": teacher_cache["model_name"],
-            "trainable_modules": trainable_modules,
-            "args": vars(args),
-            "history": history,
-            "epoch": epoch,
-        },
-        checkpoint_path,
-    )
+    payload = {
+        "student_model_id": args.student_model_id,
+        "student_state_dict": student_model.state_dict(),
+        "text_embedding_model_name": text_cache["model_name"],
+        "teacher_model_name": teacher_cache["model_name"],
+        "trainable_modules": trainable_modules,
+        "args": vars(args),
+        "history": history,
+        "epoch": epoch,
+    }
+    if optimizer is not None:
+        payload["optimizer_state_dict"] = optimizer.state_dict()
+    if scaler is not None:
+        payload["scaler_state_dict"] = scaler.state_dict()
+    if best_total_loss is not None:
+        payload["best_total_loss"] = float(best_total_loss)
+    torch.save(payload, checkpoint_path)
 
 
 def main() -> None:
@@ -285,6 +317,23 @@ def main() -> None:
     set_seed(args.seed)
     configure_cuda_runtime(device=args.device, allow_tf32=not args.no_tf32)
     num_workers = resolve_num_workers(args.num_workers, args.device)
+
+    resume_payload = None
+    resume_epoch = 0
+    history: list[dict[str, float]] = []
+    if args.resume_checkpoint:
+        resume_path = resolve_resume_checkpoint_path(args.resume_checkpoint)
+        resume_payload = torch.load(resume_path, map_location="cpu")
+        resume_epoch = int(resume_payload.get("epoch", 0) or 0)
+        history = list(resume_payload.get("history", []))
+        checkpoint_model_id = resume_payload.get("student_model_id")
+        if checkpoint_model_id:
+            if checkpoint_model_id != args.student_model_id:
+                print(
+                    "Resume checkpoint model_id differs from --student-model-id; "
+                    f"using checkpoint model_id: {checkpoint_model_id}"
+                )
+            args.student_model_id = checkpoint_model_id
 
     text_cache = load_text_embedding_cache(args.text_embeddings)
     teacher_cache = load_image_embedding_cache(args.teacher_embeddings)
@@ -303,6 +352,15 @@ def main() -> None:
         student_model,
         unfreeze_last_n_blocks=args.unfreeze_last_n_blocks,
     )
+
+    if resume_payload is not None:
+        load_result = student_model.load_state_dict(resume_payload["student_state_dict"], strict=False)
+        if load_result.missing_keys or load_result.unexpected_keys:
+            print(
+                "Resume checkpoint compatibility: "
+                f"missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}"
+            )
+        print(f"Resuming from checkpoint: {args.resume_checkpoint} (epoch={resume_epoch})")
 
     if args.gradient_checkpointing and hasattr(student_model.clip_model, "set_grad_checkpointing"):
         student_model.clip_model.set_grad_checkpointing(True)
@@ -342,10 +400,28 @@ def main() -> None:
     )
     scaler = torch.cuda.amp.GradScaler(enabled=args.device.startswith("cuda"))
 
+    if args.resume_optimizer_state and resume_payload is not None:
+        optimizer_state = resume_payload.get("optimizer_state_dict")
+        scaler_state = resume_payload.get("scaler_state_dict")
+        if optimizer_state is not None:
+            optimizer.load_state_dict(optimizer_state)
+            print("Restored optimizer state from resume checkpoint.")
+        else:
+            print("Resume checkpoint has no optimizer_state_dict; optimizer starts fresh.")
+        if scaler_state is not None:
+            scaler.load_state_dict(scaler_state)
+            print("Restored GradScaler state from resume checkpoint.")
+        else:
+            print("Resume checkpoint has no scaler_state_dict; GradScaler starts fresh.")
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    history: list[dict[str, float]] = []
-    best_total_loss = float("inf")
+    if history:
+        best_total_loss = min(metric.get("total_loss", float("inf")) for metric in history)
+    else:
+        best_total_loss = float("inf")
+    if resume_payload is not None and "best_total_loss" in resume_payload:
+        best_total_loss = min(best_total_loss, float(resume_payload["best_total_loss"]))
 
     print(f"Training samples: {len(dataset)}")
     print(f"Trainable modules: {', '.join(trainable_modules)}")
@@ -357,7 +433,9 @@ def main() -> None:
 
     student_model.train()
 
+    total_target_epoch = resume_epoch + args.epochs
     for epoch in range(args.epochs):
+        current_epoch = resume_epoch + epoch + 1
         optimizer.zero_grad(set_to_none=True)
         running = {
             "contrastive_loss": 0.0,
@@ -371,7 +449,7 @@ def main() -> None:
         progress = tqdm(
             loader,
             total=len(loader),
-            desc=f"Epoch {epoch + 1}/{args.epochs}",
+            desc=f"Epoch {current_epoch}/{total_target_epoch}",
             dynamic_ncols=True,
         )
 
@@ -434,7 +512,7 @@ def main() -> None:
         progress.close()
 
         epoch_metrics = {key: value / len(loader) for key, value in running.items()}
-        epoch_metrics["epoch"] = epoch + 1
+        epoch_metrics["epoch"] = current_epoch
         epoch_metrics["optimizer_steps"] = optimizer_steps
         if args.device.startswith("cuda"):
             epoch_metrics["max_memory_reserved_gb"] = round(
@@ -446,7 +524,7 @@ def main() -> None:
         print(json.dumps(epoch_metrics, sort_keys=True))
 
         if args.save_epoch_checkpoints:
-            epoch_checkpoint_path = output_dir / f"student_checkpoint_epoch_{epoch + 1:02d}.pt"
+            epoch_checkpoint_path = output_dir / f"student_checkpoint_epoch_{current_epoch:02d}.pt"
             save_training_checkpoint(
                 epoch_checkpoint_path,
                 student_model=student_model,
@@ -455,7 +533,10 @@ def main() -> None:
                 trainable_modules=trainable_modules,
                 args=args,
                 history=history,
-                epoch=epoch + 1,
+                optimizer=optimizer,
+                scaler=scaler,
+                best_total_loss=best_total_loss,
+                epoch=current_epoch,
             )
 
         if epoch_metrics["total_loss"] < best_total_loss:
@@ -469,7 +550,10 @@ def main() -> None:
                 trainable_modules=trainable_modules,
                 args=args,
                 history=history,
-                epoch=epoch + 1,
+                optimizer=optimizer,
+                scaler=scaler,
+                best_total_loss=best_total_loss,
+                epoch=current_epoch,
             )
 
     checkpoint_path = output_dir / "student_checkpoint.pt"
@@ -481,7 +565,10 @@ def main() -> None:
         trainable_modules=trainable_modules,
         args=args,
         history=history,
-        epoch=args.epochs,
+        optimizer=optimizer,
+        scaler=scaler,
+        best_total_loss=best_total_loss,
+        epoch=total_target_epoch,
     )
     metrics_path = output_dir / "history.json"
     metrics_path.write_text(json.dumps(history, indent=2), encoding="utf-8")

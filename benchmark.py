@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--coco-ann", default="coco2017/annotations/captions_val2017.json")
     parser.add_argument("--baseline-model-id", default="hf-hub:laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K")
     parser.add_argument("--teacher-model-id", default="hf-hub:laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K")
-    parser.add_argument("--student-checkpoint", default="artifacts/student_distill_v3/best_loss_checkpoint.pt")
+    parser.add_argument("--student-checkpoint", default="artifacts/student_distill_v4/best_loss_checkpoint.pt")
     parser.add_argument("--eval-batch-size", type=int, default=256)
     parser.add_argument("--feature-batch-size", type=int, default=256)
     parser.add_argument("--num-workers", type=int, default=4)

@@ -6,7 +6,7 @@ import qai_hub
 from utils.track1_utils import load_images_from_folder
 
 # TODO: Define image folder path
-image_folder = "dataset/images"  # change to your folder
+image_folder = "inference_dataset/images"  # change to your folder
 
 # Process images
 input_image = load_images_from_folder(image_folder)
@@ -20,7 +20,7 @@ print(f"First image shape: {input_image[0].shape}")  # Should be (1, 3, 224, 224
 print(qai_hub.upload_dataset({"image": input_image}))
 
 # TODO: Load txt CSV
-csv_path = "dataset/txt_list.csv"
+csv_path = "inference_dataset/txt_list.csv"
 df = pd.read_csv(csv_path)
 
 # Get unique text prompts in order from the second column, drop NaN
@@ -38,11 +38,11 @@ for prompt in prompts:
         truncation=True,
         max_length=77,
         return_tensors="pt"
-    )["input_ids"].to(torch.int64)
-    tokenized_texts.append(tokens.numpy())  # convert to numpy array
+    )["input_ids"].to(torch.int32)
+    tokenized_texts.append(tokens.cpu().numpy())  # convert to numpy array
 
 # Example: check first element
 print(tokenized_texts[0].shape)  # (1, 77)
 print(tokenized_texts[0].dtype)  # int32
 
-print(qai_hub.upload_dataset({"text": tokenized_texts}))
+print(qai_hub.upload_dataset({"text_input": tokenized_texts}))
