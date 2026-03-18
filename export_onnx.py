@@ -141,7 +141,7 @@ def main() -> None:
             model=text_encoder,
             dummy_input=dummy_text_input,
             output_path=text_onnx_path,
-            input_names=["text_input"],
+            input_names=["text"],
             output_names=["text_embedding"],
             opset_version=args.opset_version,
         )
