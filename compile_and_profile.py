@@ -98,7 +98,7 @@ def main() -> None:
     image_path, text_path = resolve_onnx_paths(args)
     target_device = qai_hub.Device(args.device)
 
-    compile_options = "--target_runtime precompiled_qnn_onnx --truncate_64bit_io"
+    compile_options = "--target_runtime qnn_dlc --truncate_64bit_io"
 
     image_model = load_and_validate_onnx(image_path, "Image")
     print("\nSubmitting image compile job...")
@@ -117,7 +117,7 @@ def main() -> None:
         text_compile_id = compile_model(
             model=text_model,
             device=target_device,
-            input_specs={"text_input": ((1, 77), "int32")},
+            input_specs={"text": ((1, 77), "int32")},
             options=compile_options,
         )
         print(f"Text compile job ID: {text_compile_id}")
