@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 from contextlib import nullcontext
@@ -5,7 +7,7 @@ from pathlib import Path
 
 import open_clip
 import torch
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
@@ -13,16 +15,56 @@ from utils.track1_utils import load_track1_image_table, save_image_embedding_cac
 
 
 class Track1ImageDataset(Dataset):
-    def __init__(self, image_paths: list[str], preprocess):
+    def __init__(
+        self,
+        image_names: list[str],
+        image_paths: list[str],
+        preprocess,
+        *,
+        strict_images: bool,
+    ):
+        self.image_names = image_names
         self.image_paths = image_paths
         self.preprocess = preprocess
+        self.strict_images = strict_images
 
     def __len__(self) -> int:
         return len(self.image_paths)
 
-    def __getitem__(self, index: int) -> torch.Tensor:
-        with Image.open(self.image_paths[index]) as image:
-            return self.preprocess(image.convert("RGB"))
+    def __getitem__(self, index: int) -> dict[str, object]:
+        image_name = self.image_names[index]
+        image_path = self.image_paths[index]
+        try:
+            with Image.open(image_path) as image:
+                pixel_values = self.preprocess(image.convert("RGB"))
+            return {
+                "ok": True,
+                "image_name": image_name,
+                "pixel_values": pixel_values,
+                "error": "",
+            }
+        except (UnidentifiedImageError, OSError, ValueError) as exc:
+            if self.strict_images:
+                raise
+            return {
+                "ok": False,
+                "image_name": image_name,
+                "pixel_values": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+
+def collate_teacher_batch(batch: list[dict[str, object]]) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    valid_samples = [sample for sample in batch if bool(sample["ok"])]
+    invalid_samples = [sample for sample in batch if not bool(sample["ok"])]
+
+    if not valid_samples:
+        return None, invalid_samples
+
+    return {
+        "pixel_values": torch.stack([sample["pixel_values"] for sample in valid_samples], dim=0),
+        "image_names": [str(sample["image_name"]) for sample in valid_samples],
+    }, invalid_samples
 
 
 def resolve_num_workers(requested_num_workers: int | None, device: str) -> int:
@@ -52,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-folder", default="dataset/images")
     parser.add_argument(
         "--model-id",
-        default="hf-hub:laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K",
+        default="hf-hub:laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
         help="Teacher OpenCLIP model identifier.",
     )
     parser.add_argument("--output", default="artifacts/teacher_image_embeddings.npz")
@@ -62,7 +104,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--channels-last", action="store_true")
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--no-tf32", action="store_true")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--strict-images",
+        action="store_true",
+        help="Fail immediately when an unreadable image is encountered.",
+    )
+    parser.add_argument(
+        "--failed-images-log",
+        help="Optional path to save a TSV of skipped images and decode errors.",
+    )
+    parser.add_argument("--device", default="cuda:1" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
 
@@ -83,7 +134,12 @@ def main() -> None:
     outputs: list[torch.Tensor] = []
     image_names = image_table["image_name"].tolist()
     image_paths = image_table["image_path"].tolist()
-    dataset = Track1ImageDataset(image_paths, preprocess)
+    dataset = Track1ImageDataset(
+        image_names,
+        image_paths,
+        preprocess,
+        strict_images=args.strict_images,
+    )
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -92,6 +148,7 @@ def main() -> None:
         pin_memory=args.device.startswith("cuda"),
         persistent_workers=num_workers > 0,
         prefetch_factor=args.prefetch_factor if num_workers > 0 else None,
+        collate_fn=collate_teacher_batch,
     )
 
     print(f"Image loader workers: {num_workers}")
@@ -100,14 +157,24 @@ def main() -> None:
         print(f"Channels-last: {args.channels_last}")
         print(f"TF32 enabled: {not args.no_tf32}")
 
+    kept_image_names: list[str] = []
+    failed_samples: list[tuple[str, str]] = []
+
     with torch.inference_mode():
-        for pixel_values in tqdm(
+        for packed_batch, invalid_samples in tqdm(
             loader,
             total=len(loader),
             desc="Encoding teacher images",
             unit="batch",
             dynamic_ncols=True,
         ):
+            for sample in invalid_samples:
+                failed_samples.append((str(sample["image_name"]), str(sample["error"])))
+
+            if packed_batch is None:
+                continue
+
+            pixel_values = packed_batch["pixel_values"]
             pixel_values = pixel_values.to(args.device, non_blocking=True)
             if args.channels_last and args.device.startswith("cuda"):
                 pixel_values = pixel_values.contiguous(memory_format=torch.channels_last)
@@ -120,16 +187,32 @@ def main() -> None:
                 features = model.encode_image(pixel_values)
                 features = torch.nn.functional.normalize(features, dim=-1)
             outputs.append(features.float().cpu())
+            kept_image_names.extend(packed_batch["image_names"])
+
+    if not outputs:
+        raise RuntimeError("No valid images were encoded. Check --img-list and image file integrity.")
 
     embeddings = torch.cat(outputs, dim=0).numpy()
     output_path = Path(args.output)
     save_image_embedding_cache(
         output_path,
-        image_names=image_names,
+        image_names=kept_image_names,
         embeddings=embeddings,
         model_name=args.model_id,
     )
-    print(f"Saved {len(image_names)} teacher image embeddings to {output_path}")
+    print(f"Saved {len(kept_image_names)} teacher image embeddings to {output_path}")
+
+    skipped_count = len(failed_samples)
+    if skipped_count > 0:
+        failed_log_path = Path(args.failed_images_log) if args.failed_images_log else output_path.with_suffix(".skipped.tsv")
+        failed_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with failed_log_path.open("w", encoding="utf-8") as handle:
+            handle.write("image_name\terror\n")
+            for image_name, error in failed_samples:
+                escaped_error = error.replace("\n", " ").replace("\r", " ")
+                handle.write(f"{image_name}\t{escaped_error}\n")
+        print(f"Skipped unreadable images: {skipped_count}")
+        print(f"Saved skipped-image log to {failed_log_path}")
 
 
 if __name__ == "__main__":

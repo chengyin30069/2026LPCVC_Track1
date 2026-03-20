@@ -33,15 +33,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--coco-root", default="coco2017/val2017")
     parser.add_argument("--coco-ann", default="coco2017/annotations/captions_val2017.json")
     parser.add_argument("--baseline-model-id", default="hf-hub:laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K")
-    parser.add_argument("--teacher-model-id", default="hf-hub:laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K")
-    parser.add_argument("--student-checkpoint", default="artifacts/student_distill_v4/best_loss_checkpoint.pt")
+    parser.add_argument("--teacher-model-id", default="hf-hub:laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+    parser.add_argument("--student-checkpoint", default="artifacts/student_stage2_text_align_v2/best_loss_checkpoint.pt")
     parser.add_argument("--eval-batch-size", type=int, default=256)
     parser.add_argument("--feature-batch-size", type=int, default=256)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--channels-last", action="store_true")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda:1" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
 

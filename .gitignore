@@ -13,3 +13,6 @@ dataset_smoke
 artifacts
 coco2017
 inference_dataset
+dataset_image_only
+teacher_image_embeddings_image_only.npz
+teacher_image_embeddings_image_only.skipped.tsv

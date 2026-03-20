@@ -72,21 +72,27 @@ def load_track1_image_table(
     img_list_path: str | Path,
     image_folder: str | Path | None = None,
 ) -> pd.DataFrame:
-    dataframe = pd.read_csv(img_list_path).iloc[:, :2].dropna().copy()
+    dataframe = pd.read_csv(img_list_path).copy()
+    if dataframe.shape[1] < 1:
+        raise ValueError(f"Expected at least one column in image list: {img_list_path}")
+
     image_column = dataframe.columns[0]
-    label_column = dataframe.columns[1]
+    dataframe = dataframe[dataframe[image_column].notna()].copy()
 
     if image_column == "Image_names":
         dataframe = dataframe.sort_values(by=image_column)
 
-    dataframe = dataframe.rename(
-        columns={
-            image_column: "image_name",
-            label_column: "positive_text_ids_raw",
-        }
-    )
+    dataframe = dataframe.rename(columns={image_column: "image_name"})
     dataframe["image_name"] = dataframe["image_name"].astype(str)
-    dataframe["positive_text_ids"] = dataframe["positive_text_ids_raw"].map(parse_text_id_list)
+
+    if dataframe.shape[1] >= 2:
+        label_column = dataframe.columns[1]
+        dataframe["positive_text_ids_raw"] = dataframe[label_column]
+        dataframe["positive_text_ids"] = dataframe["positive_text_ids_raw"].map(
+            lambda value: parse_text_id_list(value) if pd.notna(value) else []
+        )
+    else:
+        dataframe["positive_text_ids"] = [[] for _ in range(len(dataframe))]
 
     if image_folder is not None:
         folder = Path(image_folder)

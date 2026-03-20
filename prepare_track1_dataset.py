@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import shutil
@@ -35,6 +37,21 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to extracted COCO train2014 images.",
     )
     parser.add_argument(
+        "--include-coco2017-train",
+        action="store_true",
+        help="Also include COCO 2017 train captions/images when available.",
+    )
+    parser.add_argument(
+        "--coco2017-captions-json",
+        default=None,
+        help="Optional path to captions_train2017.json.",
+    )
+    parser.add_argument(
+        "--coco2017-images-dir",
+        default=None,
+        help="Optional path to extracted COCO train2017 images.",
+    )
+    parser.add_argument(
         "--vg-region-descriptions-json",
         default=None,
         help="Optional path to Visual Genome region_descriptions.json.",
@@ -53,13 +70,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-coco-images",
         type=int,
-        default=80000,
+        default=82000,
         help="Maximum number of COCO images to include.",
+    )
+    parser.add_argument(
+        "--max-coco2017-images",
+        type=int,
+        default=118000,
+        help="Maximum number of COCO 2017 train images to include when enabled.",
     )
     parser.add_argument(
         "--max-vg-images",
         type=int,
-        default=40000,
+        default=70000,
         help="Maximum number of Visual Genome images to include.",
     )
     parser.add_argument(
@@ -71,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-vg-regions-per-image",
         type=int,
-        default=2,
+        default=0,
         help="Maximum number of Visual Genome region phrases kept per image.",
     )
     parser.add_argument(
@@ -81,7 +104,7 @@ def parse_args() -> argparse.Namespace:
         help="Upper bound for the global text pool to keep hard-negative mining manageable.",
     )
     parser.add_argument("--min-text-chars", type=int, default=6)
-    parser.add_argument("--max-text-chars", type=int, default=160)
+    parser.add_argument("--max-text-chars", type=int, default=77)
     parser.add_argument(
         "--link-mode",
         choices=["symlink", "hardlink", "copy"],
@@ -251,6 +274,42 @@ def resolve_coco_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     return captions_json, images_dir
 
 
+def resolve_coco2017_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    if args.coco2017_captions_json and args.coco2017_images_dir:
+        return Path(args.coco2017_captions_json), Path(args.coco2017_images_dir)
+
+    local_captions = Path("coco2017/annotations/captions_train2017.json")
+    local_images = Path("coco2017/train2017")
+    if local_captions.exists() and local_images.exists():
+        return local_captions, local_images
+
+    raw_root = Path(args.raw_root) / "coco2017"
+    annotations_zip = raw_root / "annotations_trainval2017.zip"
+    train_zip = raw_root / "train2017.zip"
+    annotations_dir = raw_root / "annotations"
+    images_parent = raw_root / "images"
+    images_dir = images_parent / "train2017"
+
+    if not args.skip_download:
+        download_file(
+            "http://images.cocodataset.org/annotations/annotations_trainval2017.zip",
+            annotations_zip,
+            validate_zip=True,
+        )
+        download_file("http://images.cocodataset.org/zips/train2017.zip", train_zip, validate_zip=True)
+
+    if not annotations_zip.exists() or not train_zip.exists():
+        raise FileNotFoundError(
+            "COCO 2017 train archives are missing. "
+            "Re-run without --skip-download or pass explicit --coco2017-* paths."
+        )
+
+    extract_zip(annotations_zip, annotations_dir)
+    extract_zip(train_zip, images_parent)
+    captions_json = annotations_dir / "annotations" / "captions_train2017.json"
+    return captions_json, images_dir
+
+
 def resolve_vg_paths(args: argparse.Namespace) -> tuple[Path, Path, list[Path]]:
     if args.vg_region_descriptions_json and args.vg_image_data_json and args.vg_image_dirs:
         return (
@@ -301,6 +360,87 @@ def load_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def append_coco_samples(
+    *,
+    captions_json: Path,
+    coco_images_dir: Path,
+    images_dir: Path,
+    max_images: int,
+    max_captions_per_image: int,
+    text_to_id: dict[str, int],
+    text_rows: list[dict[str, object]],
+    image_rows: list[dict[str, object]],
+    max_unique_texts: int,
+    min_text_chars: int,
+    max_text_chars: int,
+    image_prefix: str,
+    source_summary_key: str,
+    link_mode: str,
+    summary: dict[str, object],
+) -> None:
+    coco_annotations = load_json(captions_json)
+    image_id_to_name = {
+        int(image["id"]): str(image["file_name"])
+        for image in coco_annotations.get("images", [])
+        if "id" in image and "file_name" in image
+    }
+
+    captions_by_image: dict[int, list[str]] = defaultdict(list)
+    for annotation in tqdm(
+        coco_annotations.get("annotations", []),
+        desc=f"Scanning {source_summary_key} captions",
+        unit="caption",
+        dynamic_ncols=True,
+    ):
+        caption = annotation.get("caption")
+        image_id = annotation.get("image_id")
+        if not isinstance(caption, str) or image_id is None:
+            continue
+        normalized = normalize_text(caption, min_text_chars, max_text_chars)
+        if normalized is not None:
+            captions_by_image[int(image_id)].append(normalized)
+
+    kept_images = 0
+    for image_id, captions in tqdm(
+        captions_by_image.items(),
+        total=min(len(captions_by_image), max_images),
+        desc=f"Building {source_summary_key} samples",
+        unit="image",
+        dynamic_ncols=True,
+    ):
+        if kept_images >= max_images or len(text_rows) >= max_unique_texts:
+            break
+
+        texts = dedupe_preserve_order(captions)[:max_captions_per_image]
+        positive_ids = register_texts(
+            texts,
+            text_to_id=text_to_id,
+            text_rows=text_rows,
+            max_unique_texts=max_unique_texts,
+        )
+        if not positive_ids:
+            continue
+
+        file_name = image_id_to_name.get(image_id)
+        if not file_name:
+            continue
+
+        source_path = coco_images_dir / file_name
+        if not source_path.exists():
+            continue
+
+        image_name = f"{image_prefix}_{Path(file_name).name}"
+        link_or_copy_image(source_path, images_dir / image_name, link_mode)
+        image_rows.append({"Image_names": image_name, "GT_text_ids": ";".join(map(str, positive_ids))})
+        kept_images += 1
+
+    summary["sources"][source_summary_key] = {
+        "images": kept_images,
+        "captions_per_image": max_captions_per_image,
+        "captions_json": str(captions_json),
+    }
+
+
 def build_vg_image_lookup(image_dirs: list[Path]) -> dict[str, Path]:
     lookup: dict[str, Path] = {}
     for image_dir in image_dirs:
@@ -343,66 +483,43 @@ def main() -> None:
 
     if not args.skip_coco:
         captions_json, coco_images_dir = resolve_coco_paths(args)
-        coco_annotations = load_json(captions_json)
-        image_id_to_name = {
-            int(image["id"]): str(image["file_name"])
-            for image in coco_annotations.get("images", [])
-            if "id" in image and "file_name" in image
-        }
-        captions_by_image: dict[int, list[str]] = defaultdict(list)
-        for annotation in tqdm(
-            coco_annotations.get("annotations", []),
-            desc="Scanning COCO captions",
-            unit="caption",
-            dynamic_ncols=True,
-        ):
-            caption = annotation.get("caption")
-            image_id = annotation.get("image_id")
-            if not isinstance(caption, str) or image_id is None:
-                continue
-            normalized = normalize_text(caption, args.min_text_chars, args.max_text_chars)
-            if normalized is not None:
-                captions_by_image[int(image_id)].append(normalized)
+        append_coco_samples(
+            captions_json=captions_json,
+            coco_images_dir=coco_images_dir,
+            images_dir=images_dir,
+            max_images=args.max_coco_images,
+            max_captions_per_image=args.max_coco_captions_per_image,
+            text_to_id=text_to_id,
+            text_rows=text_rows,
+            image_rows=image_rows,
+            max_unique_texts=args.max_unique_texts,
+            min_text_chars=args.min_text_chars,
+            max_text_chars=args.max_text_chars,
+            image_prefix="coco2014",
+            source_summary_key="coco2014",
+            link_mode=args.link_mode,
+            summary=summary,
+        )
 
-        kept_images = 0
-        for image_id, captions in tqdm(
-            captions_by_image.items(),
-            total=min(len(captions_by_image), args.max_coco_images),
-            desc="Building COCO samples",
-            unit="image",
-            dynamic_ncols=True,
-        ):
-            if kept_images >= args.max_coco_images or len(text_rows) >= args.max_unique_texts:
-                break
-
-            texts = dedupe_preserve_order(captions)[:args.max_coco_captions_per_image]
-            positive_ids = register_texts(
-                texts,
+        if args.include_coco2017_train and len(text_rows) < args.max_unique_texts:
+            coco2017_captions_json, coco2017_images_dir = resolve_coco2017_paths(args)
+            append_coco_samples(
+                captions_json=coco2017_captions_json,
+                coco_images_dir=coco2017_images_dir,
+                images_dir=images_dir,
+                max_images=args.max_coco2017_images,
+                max_captions_per_image=args.max_coco_captions_per_image,
                 text_to_id=text_to_id,
                 text_rows=text_rows,
+                image_rows=image_rows,
                 max_unique_texts=args.max_unique_texts,
+                min_text_chars=args.min_text_chars,
+                max_text_chars=args.max_text_chars,
+                image_prefix="coco2017",
+                source_summary_key="coco2017_train",
+                link_mode=args.link_mode,
+                summary=summary,
             )
-            if not positive_ids:
-                continue
-
-            file_name = image_id_to_name.get(image_id)
-            if not file_name:
-                continue
-
-            source_path = coco_images_dir / file_name
-            if not source_path.exists():
-                continue
-
-            image_name = f"coco_{Path(file_name).name}"
-            link_or_copy_image(source_path, images_dir / image_name, args.link_mode)
-            image_rows.append({"Image_names": image_name, "GT_text_ids": ";".join(map(str, positive_ids))})
-            kept_images += 1
-
-        summary["sources"]["coco"] = {
-            "images": kept_images,
-            "captions_per_image": args.max_coco_captions_per_image,
-            "captions_json": str(captions_json),
-        }
 
     if not args.skip_visual_genome and len(text_rows) < args.max_unique_texts:
         region_json, image_data_json, vg_image_dirs = resolve_vg_paths(args)

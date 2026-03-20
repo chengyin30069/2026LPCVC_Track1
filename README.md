@@ -126,16 +126,17 @@ image
 Training uses the following side inputs:
 
 ```text
-cached text embeddings         -> positives for contrastive training
-cached hard-negative ids       -> ranking-aware negatives
-cached teacher image embeddings -> distillation target
+cached teacher image embeddings -> required distillation target
+cached text embeddings          -> optional contrastive positives
+cached hard-negative ids        -> optional ranking-aware negatives
 ```
 
 Loss used by `train_student_distill.py`:
 
 ```text
-total_loss = contrastive_loss
-					 + distill_weight * mse(student_embed, teacher_embed)
+total_loss = contrastive_weight * contrastive_loss
+					 + distill_weight * distill_loss
+					 + baseline_anchor_weight * anchor_loss
 					 + hard_negative_weight * margin_loss
 ```
 
@@ -144,9 +145,9 @@ Default training characteristics:
 * student backbone: `hf-hub:laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K`
 * teacher backbone: `hf-hub:laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K`
 * mixed precision on CUDA
-* `batch_size=32`
-* `grad_accumulation=8`
-* `epochs=10`
+* `batch_size=64`
+* `grad_accumulation=4`
+* `epochs=14`
 * `lr=1e-5`
 * `weight_decay=1e-4`
 
@@ -155,10 +156,10 @@ Default training characteristics:
 The current end-to-end training flow is:
 
 1. Build a Track1-style dataset from COCO and Visual Genome.
-2. Cache all text embeddings with prompt ensembling.
-3. Mine hard negatives offline from the cached text embeddings.
-4. Precompute teacher image embeddings once offline.
-5. Train the student image model with contrastive loss, teacher distillation, and hard-negative ranking loss.
+2. (Recommended) build a larger image-only distillation dataset from all local image sources.
+3. Precompute teacher image embeddings once offline.
+4. Train the student image model with image-only distillation as the default.
+5. Optionally add text-cache contrastive / hard-negative losses later.
 6. Evaluate the trained checkpoint on the local LPCVC Track1 metric.
 
 ### **Step 0. Build a Low-Friction Training Dataset**
@@ -173,10 +174,12 @@ This avoids Hugging Face loader issues and directly generates the Track1 files e
 ```bash
 python prepare_track1_dataset.py \
 	--output-dir dataset \
+	--include-coco2017-train \
 	--max-coco-images 80000 \
-	--max-vg-images 40000 \
-	--max-coco-captions-per-image 2 \
-	--max-vg-regions-per-image 2 \
+	--max-coco2017-images 118000 \
+	--max-vg-images 70000 \
+	--max-coco-captions-per-image 10 \
+	--max-vg-regions-per-image 10 \
 	--max-unique-texts 250000
 ```
 
@@ -191,70 +194,123 @@ dataset/img_list.csv
 dataset/summary.json
 ```
 
-### **Step 1. Cache Text Embeddings**
+### **Step 1. (Recommended) Build a Larger Image-Only Distillation Set**
+
+```bash
+python prepare_image_only_distill_dataset.py \
+	--output-dir dataset_image_only \
+	--shuffle \
+	--max-images 190000 \
+	--overwrite
+```
+
+Default source folders are:
+
+```text
+raw_datasets/coco2014/images/train2014
+raw_datasets/visual_genome/VG_100K/VG_100K
+raw_datasets/visual_genome/VG_100K_2/VG_100K_2
+coco2017/val2017
+```
+
+The script creates:
+
+```text
+dataset_image_only/images/
+dataset_image_only/img_list.csv
+dataset_image_only/summary.json
+```
+
+### **Step 2. Precompute Teacher Image Embeddings**
+
+```bash
+python precompute_teacher_embeddings.py \
+	--img-list dataset_image_only/img_list.csv \
+	--image-folder dataset_image_only/images \
+	--output artifacts/teacher_image_embeddings_image_only.npz
+```
+
+Default teacher is now `hf-hub:laion/CLIP-ViT-H-14-laion2B-s32B-b79K`.
+To switch teacher models, override `--model-id`.
+
+### **Step 3. Train the Student (Image-Only Distillation First)**
+
+```bash
+python train_student_distill.py \
+  --img-list dataset_image_only/img_list.csv \
+  --image-folder dataset_image_only/images \
+  --teacher-embeddings artifacts/teacher_image_embeddings_image_only.npz \
+  --output-dir artifacts/student_distill_image_only_v1 \
+	--epochs 12 \
+  --batch-size 256 \
+  --grad-accumulation 1 \
+	--lr 5e-6 \
+  --weight-decay 1e-4 \
+  --contrastive-weight 0.0 \
+	--distill-weight 0.7 \
+	--distill-loss-type cosine \
+	--baseline-anchor-weight 0.3 \
+	--baseline-anchor-final-weight 0.1 \
+  --hard-negative-weight 0.0 \
+	--lr-scheduler cosine \
+	--warmup-steps 500 \
+	--min-lr 1e-7 \
+	--val-split 0.05 \
+	--best-checkpoint-metric val-loss \
+	--grad-clip-norm 1.0 \
+	--unfreeze-last-n-blocks 0 \
+  --gradient-checkpointing \
+  --save-epoch-checkpoints
+```
+
+For single-GPU 3090Ti, start with `--batch-size 128` and `--grad-accumulation 2` if you see unstable training.
+
+### **Step 4. (Optional) Enable Text-Based Losses Later**
 
 ```bash
 python cache_text_embeddings.py \
 	--txt-list dataset/txt_list.csv \
 	--output artifacts/text_embeddings.npz
-```
 
-Default prompt ensemble:
-
-```text
-{}
-a photo of {}
-an image of {}
-a picture of {}
-this is {}
-```
-
-### **Step 2. Mine Hard Negatives**
-
-```bash
 python mine_hard_negatives.py \
 	--embeddings artifacts/text_embeddings.npz \
 	--output artifacts/hard_negatives.npz \
 	--csv-output artifacts/hard_negatives.csv \
 	--top-k 10
-```
 
-### **Step 3. Precompute Teacher Image Embeddings**
-
-```bash
-python precompute_teacher_embeddings.py \
+python train_student_distill.py \
 	--img-list dataset/img_list.csv \
 	--image-folder dataset/images \
-	--output artifacts/teacher_image_embeddings.npz
+	--text-embeddings artifacts/text_embeddings.npz \
+	--teacher-embeddings artifacts/teacher_image_embeddings.npz \
+	--hard-negatives artifacts/hard_negatives.npz \
+	--contrastive-weight 1.0 \
+	--distill-weight 0.2 \
+	--hard-negative-weight 0.03 \
+	--num-hard-negatives 4 \
+	--val-split 0.05 \
+	--best-checkpoint-metric val-recall@10 \
+	--val-recall-max-texts 0 \
+	--val-recall-image-chunk-size 256 \
+	--val-recall-text-chunk-size 8192
 ```
 
-To switch teacher models, override `--model-id`.
+`val-recall@10` is available only when text supervision is enabled and a validation split exists.
+If not available, the trainer automatically falls back to loss-based checkpoint selection.
 
-### **Step 4. Train the Student**
+### **Step 4.5. Run Stage1 + Stage2 with One Command**
 
 ```bash
-./.venv/bin/python train_student_distill.py \
-  --img-list dataset/img_list.csv \
-  --image-folder dataset/images \
-  --text-embeddings artifacts/text_embeddings.npz \
-  --teacher-embeddings artifacts/teacher_image_embeddings.npz \
-  --hard-negatives artifacts/hard_negatives.npz \
-  --output-dir artifacts/student_distill_v3 \
-  --epochs 10 \
-  --batch-size 32 \
-  --grad-accumulation 8 \
-  --lr 1e-5 \
-  --weight-decay 1e-4 \
-  --distill-weight 0.3 \
-  --baseline-anchor-weight 0.2 \
-  --hard-negative-weight 0.05 \
-  --num-hard-negatives 4 \
-  --unfreeze-last-n-blocks 1 \
-  --gradient-checkpointing \
-  --save-epoch-checkpoints
+python run_two_stage_distill.py \
+	--gradient-checkpointing \
+	--device cuda
 ```
 
-If VRAM is tight on an 8 GB card, reduce `--batch-size` first and keep the effective batch size through `--grad-accumulation`.
+Dry-run mode (print commands without executing):
+
+```bash
+python run_two_stage_distill.py --dry-run
+```
 
 ### **Step 5. Evaluate the Trained Checkpoint Locally**
 
@@ -263,8 +319,7 @@ python local_inference_openclip.py \
 	--txt-list dataset/txt_list.csv \
 	--img-list dataset/img_list.csv \
 	--image-folder dataset/images \
-	--text-embedding-cache artifacts/text_embeddings.npz \
-	--student-checkpoint artifacts/student_distill_v2/student_checkpoint.pt
+	--student-checkpoint artifacts/student_distill_image_only_v1/best_loss_checkpoint.pt
 ```
 
 This path evaluates the exact student checkpoint used in this repository on the Track1 retrieval metric.
@@ -397,9 +452,43 @@ python inference.py
 
 After completion, the script prints the Recall@10 score for the dataset.
 
-### **5. Cache Text Embeddings with Prompt Ensemble**
+### **5. Build an Image-Only Distillation Dataset**
 
-The recommended first optimization pass is to precompute text embeddings once and reuse them during local experiments or training.
+Use this when you want to maximize distillation image count without requiring paired text labels.
+
+```bash
+python prepare_image_only_distill_dataset.py \
+	--output-dir dataset_image_only \
+	--shuffle \
+	--max-images 190000 \
+	--overwrite
+```
+
+### **6. Precompute Teacher Image Embeddings**
+
+```bash
+python precompute_teacher_embeddings.py \
+	--img-list dataset_image_only/img_list.csv \
+	--image-folder dataset_image_only/images \
+	--output artifacts/teacher_image_embeddings_image_only.npz
+```
+
+### **7. Train the Student (Image-Only First)**
+
+```bash
+python train_student_distill.py \
+	--img-list dataset_image_only/img_list.csv \
+	--image-folder dataset_image_only/images \
+	--teacher-embeddings artifacts/teacher_image_embeddings_image_only.npz \
+	--output-dir artifacts/student_distill_image_only_v1 \
+	--contrastive-weight 0.0 \
+	--distill-weight 1.0 \
+	--hard-negative-weight 0.0
+```
+
+### **8. Optional: Add Text Cache + Hard Negatives Later**
+
+If image-only distillation is stable and you want extra retrieval gains, re-enable text-side losses.
 
 ```bash
 python cache_text_embeddings.py \
@@ -417,11 +506,7 @@ a picture of {}
 this is {}
 ```
 
-You can override templates by repeating `--template`.
-
-### **6. Mine Hard Negatives Offline**
-
-After caching text embeddings, generate hard negatives once offline.
+Then mine hard negatives and train with text supervision:
 
 ```bash
 python mine_hard_negatives.py \
@@ -429,54 +514,25 @@ python mine_hard_negatives.py \
 	--output artifacts/hard_negatives.npz \
 	--csv-output artifacts/hard_negatives.csv \
 	--top-k 10
-```
 
-The implementation uses chunked cosine search, so it avoids materializing the full $N \times N$ similarity matrix in memory.
-
-### **7. Reuse Cached Text Embeddings in Local Evaluation**
-
-```bash
-python local_inference_openclip.py \
-	--text-embedding-cache artifacts/text_embeddings.npz
-```
-
-This keeps the deployed image path unchanged while allowing offline text-side experimentation.
-
-### **8. Precompute Teacher Image Embeddings**
-
-Phase 2 starts by extracting teacher image features once offline.
-
-```bash
-python precompute_teacher_embeddings.py \
-	--img-list dataset/img_list.csv \
-	--image-folder dataset/images \
-	--output artifacts/teacher_image_embeddings.npz
-```
-
-The default teacher is `CLIP-ViT-L-14-DataComp.XL-s13B-b90K`, but you can override it with `--model-id`.
-
-### **9. Train the Student with Distillation**
-
-```bash
 python train_student_distill.py \
 	--img-list dataset/img_list.csv \
 	--image-folder dataset/images \
 	--text-embeddings artifacts/text_embeddings.npz \
 	--teacher-embeddings artifacts/teacher_image_embeddings.npz \
 	--hard-negatives artifacts/hard_negatives.npz \
-	--output-dir artifacts/student_distill \
-	--epochs 10 \
-	--batch-size 32 \
-	--grad-accumulation 8
+	--contrastive-weight 1.0 \
+	--distill-weight 0.3 \
+	--hard-negative-weight 0.05 \
+	--num-hard-negatives 4
 ```
 
-The training loop keeps the text side offline, uses mixed precision on CUDA, and trains only the projection head plus the last vision blocks by default.
+The implementation uses chunked cosine search, so it avoids materializing the full $N \times N$ similarity matrix in memory.
 
-### **10. Evaluate a Trained Student Checkpoint**
+### **9. Evaluate a Trained Student Checkpoint**
 
 ```bash
 python local_inference_openclip.py \
-	--text-embedding-cache artifacts/text_embeddings.npz \
 	--student-checkpoint artifacts/student_distill/student_checkpoint.pt
 ```
 
