@@ -16,6 +16,14 @@ DEFAULT_SOURCE_DIRS = [
     "raw_datasets/visual_genome/VG_100K_2/VG_100K_2",
     "coco2017/val2017",
 ]
+EXTENDED_SOURCE_DIR_CANDIDATES = [
+    "raw_datasets/conceptual_captions/cc3m/images",
+    "raw_datasets/conceptual_captions/cc12m/images",
+    "raw_datasets/sbu_captions/images",
+    "raw_datasets/redcaps/images",
+    "raw_datasets/flickr30k/images",
+    "raw_datasets/laion_aesthetics/images",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         action="append",
         dest="source_dirs",
         help="Image source directory (can be passed multiple times).",
+    )
+    parser.add_argument(
+        "--include-extended-sources",
+        action="store_true",
+        help="Also include common external image pools (CC3M/CC12M/SBU/RedCaps/Flickr30k/LAION when present).",
     )
     parser.add_argument("--max-images", type=int, default=None)
     parser.add_argument("--shuffle", action="store_true")
@@ -46,6 +59,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
+
+
+def resolve_source_dirs(
+    *,
+    source_dir_args: list[str] | None,
+    include_extended_sources: bool,
+) -> list[Path]:
+    if source_dir_args is not None:
+        return [Path(path) for path in source_dir_args]
+
+    source_dirs = [Path(path) for path in DEFAULT_SOURCE_DIRS]
+    if include_extended_sources:
+        for raw_path in EXTENDED_SOURCE_DIR_CANDIDATES:
+            candidate = Path(raw_path)
+            if candidate.exists():
+                source_dirs.append(candidate)
+    return source_dirs
 
 
 def sanitize_tag(raw: str) -> str:
@@ -110,11 +140,17 @@ def main() -> None:
 
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    source_dir_args = args.source_dirs if args.source_dirs is not None else DEFAULT_SOURCE_DIRS
-    source_dirs = [Path(path) for path in source_dir_args]
+    source_dirs = resolve_source_dirs(
+        source_dir_args=args.source_dirs,
+        include_extended_sources=args.include_extended_sources,
+    )
     existing_source_dirs = [path for path in source_dirs if path.exists()]
     if not existing_source_dirs:
         raise FileNotFoundError("No source directories exist. Pass --source-dir with valid paths.")
+
+    missing_source_dirs = [str(path) for path in source_dirs if not path.exists()]
+    if missing_source_dirs:
+        print(f"Skipping {len(missing_source_dirs)} missing source dirs.")
 
     resolved_seen: set[str] = set()
     image_records: list[tuple[Path, Path]] = []
@@ -167,7 +203,9 @@ def main() -> None:
         "link_mode": args.link_mode,
         "recursive": not args.non_recursive,
         "shuffle": args.shuffle,
+        "include_extended_sources": args.include_extended_sources,
         "sources": dict(sorted(per_source_counts.items())),
+        "missing_sources": missing_source_dirs,
     }
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 

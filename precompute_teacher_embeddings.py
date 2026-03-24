@@ -14,6 +14,49 @@ from tqdm.auto import tqdm
 from utils.track1_utils import load_track1_image_table, save_image_embedding_cache
 
 
+def resolve_backend(model_id: str, requested_backend: str) -> str:
+    if requested_backend in {"open_clip", "transformers"}:
+        return requested_backend
+    lowered = model_id.lower()
+    if lowered.startswith("google/siglip") or lowered.startswith("google/siglip2"):
+        return "transformers"
+    return "open_clip"
+
+
+def _coerce_feature_tensor(output_obj) -> torch.Tensor | None:
+    if isinstance(output_obj, torch.Tensor):
+        return output_obj
+    for candidate_name in ("image_embeds", "text_embeds", "pooler_output", "last_hidden_state"):
+        if hasattr(output_obj, candidate_name):
+            candidate = getattr(output_obj, candidate_name)
+            if isinstance(candidate, torch.Tensor):
+                if candidate.ndim == 3:
+                    return candidate[:, 0, :]
+                return candidate
+    return None
+
+
+def extract_transformers_image_features(model, inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+    if hasattr(model, "get_image_features"):
+        candidate = _coerce_feature_tensor(model.get_image_features(**inputs))
+        if candidate is not None:
+            return candidate
+
+    outputs = model(**inputs)
+    candidate = _coerce_feature_tensor(outputs)
+    if candidate is not None:
+        return candidate
+
+    for candidate_name in ("image_embeds", "pooler_output"):
+        if hasattr(outputs, candidate_name):
+            candidate = getattr(outputs, candidate_name)
+            if isinstance(candidate, torch.Tensor):
+                return candidate
+    if isinstance(outputs, torch.Tensor):
+        return outputs
+    raise RuntimeError("Unable to extract image features from transformers model output")
+
+
 class Track1ImageDataset(Dataset):
     def __init__(
         self,
@@ -94,8 +137,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-folder", default="dataset/images")
     parser.add_argument(
         "--model-id",
-        default="hf-hub:laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
-        help="Teacher OpenCLIP model identifier.",
+        default="google/siglip2-so400m-patch16-512",
+        help="Teacher model identifier (OpenCLIP or Hugging Face transformers).",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "open_clip", "transformers"],
+        default="auto",
+        help="Teacher backend. auto chooses transformers for google/siglip* models.",
     )
     parser.add_argument("--output", default="artifacts/teacher_image_embeddings.npz")
     parser.add_argument("--batch-size", type=int, default=128)
@@ -119,6 +168,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    backend = resolve_backend(args.model_id, args.backend)
     configure_cuda_runtime(device=args.device, allow_tf32=not args.no_tf32)
     num_workers = resolve_num_workers(args.num_workers, args.device)
     amp_enabled = not args.no_amp
@@ -126,30 +176,9 @@ def main() -> None:
     if image_table.empty:
         raise ValueError(f"No images found in {args.img_list}")
 
-    model, _, preprocess = open_clip.create_model_and_transforms(args.model_id)
-    model = model.to(args.device).eval()
-    if args.channels_last and args.device.startswith("cuda"):
-        model = model.to(memory_format=torch.channels_last)
-
     outputs: list[torch.Tensor] = []
     image_names = image_table["image_name"].tolist()
     image_paths = image_table["image_path"].tolist()
-    dataset = Track1ImageDataset(
-        image_names,
-        image_paths,
-        preprocess,
-        strict_images=args.strict_images,
-    )
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=args.device.startswith("cuda"),
-        persistent_workers=num_workers > 0,
-        prefetch_factor=args.prefetch_factor if num_workers > 0 else None,
-        collate_fn=collate_teacher_batch,
-    )
 
     print(f"Image loader workers: {num_workers}")
     if args.device.startswith("cuda"):
@@ -160,34 +189,108 @@ def main() -> None:
     kept_image_names: list[str] = []
     failed_samples: list[tuple[str, str]] = []
 
-    with torch.inference_mode():
-        for packed_batch, invalid_samples in tqdm(
-            loader,
-            total=len(loader),
-            desc="Encoding teacher images",
-            unit="batch",
-            dynamic_ncols=True,
-        ):
-            for sample in invalid_samples:
-                failed_samples.append((str(sample["image_name"]), str(sample["error"])))
+    if backend == "open_clip":
+        model, _, preprocess = open_clip.create_model_and_transforms(args.model_id)
+        model = model.to(args.device).eval()
+        if args.channels_last and args.device.startswith("cuda"):
+            model = model.to(memory_format=torch.channels_last)
 
-            if packed_batch is None:
-                continue
+        dataset = Track1ImageDataset(
+            image_names,
+            image_paths,
+            preprocess,
+            strict_images=args.strict_images,
+        )
+        loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=args.device.startswith("cuda"),
+            persistent_workers=num_workers > 0,
+            prefetch_factor=args.prefetch_factor if num_workers > 0 else None,
+            collate_fn=collate_teacher_batch,
+        )
 
-            pixel_values = packed_batch["pixel_values"]
-            pixel_values = pixel_values.to(args.device, non_blocking=True)
-            if args.channels_last and args.device.startswith("cuda"):
-                pixel_values = pixel_values.contiguous(memory_format=torch.channels_last)
-            autocast_context = (
-                torch.autocast(device_type="cuda", enabled=amp_enabled and args.device.startswith("cuda"))
-                if args.device.startswith("cuda")
-                else nullcontext()
-            )
-            with autocast_context:
-                features = model.encode_image(pixel_values)
-                features = torch.nn.functional.normalize(features, dim=-1)
-            outputs.append(features.float().cpu())
-            kept_image_names.extend(packed_batch["image_names"])
+        with torch.inference_mode():
+            for packed_batch, invalid_samples in tqdm(
+                loader,
+                total=len(loader),
+                desc="Encoding teacher images",
+                unit="batch",
+                dynamic_ncols=True,
+            ):
+                for sample in invalid_samples:
+                    failed_samples.append((str(sample["image_name"]), str(sample["error"])))
+
+                if packed_batch is None:
+                    continue
+
+                pixel_values = packed_batch["pixel_values"].to(args.device, non_blocking=True)
+                if args.channels_last and args.device.startswith("cuda"):
+                    pixel_values = pixel_values.contiguous(memory_format=torch.channels_last)
+                autocast_context = (
+                    torch.autocast(device_type="cuda", enabled=amp_enabled and args.device.startswith("cuda"))
+                    if args.device.startswith("cuda")
+                    else nullcontext()
+                )
+                with autocast_context:
+                    features = model.encode_image(pixel_values)
+                    features = torch.nn.functional.normalize(features, dim=-1)
+                outputs.append(features.float().cpu())
+                kept_image_names.extend(packed_batch["image_names"])
+    else:
+        from transformers import AutoModel, AutoProcessor
+
+        model = AutoModel.from_pretrained(args.model_id).to(args.device).eval()
+        processor = AutoProcessor.from_pretrained(args.model_id, use_fast=False)
+
+        with torch.inference_mode():
+            total_batches = (len(image_paths) + args.batch_size - 1) // args.batch_size
+            for start in tqdm(
+                range(0, len(image_paths), args.batch_size),
+                total=total_batches,
+                desc="Encoding teacher images",
+                unit="batch",
+                dynamic_ncols=True,
+            ):
+                end = min(start + args.batch_size, len(image_paths))
+                batch_paths = image_paths[start:end]
+                batch_names = image_names[start:end]
+
+                valid_images = []
+                valid_names = []
+                for image_name, image_path in zip(batch_names, batch_paths):
+                    try:
+                        with Image.open(image_path) as image:
+                            valid_images.append(image.convert("RGB"))
+                            valid_names.append(image_name)
+                    except (UnidentifiedImageError, OSError, ValueError) as exc:
+                        if args.strict_images:
+                            raise
+                        failed_samples.append((str(image_name), f"{type(exc).__name__}: {exc}"))
+
+                if not valid_images:
+                    continue
+
+                inputs = processor(images=valid_images, return_tensors="pt")
+                model_inputs = {
+                    key: value.to(args.device, non_blocking=True)
+                    for key, value in inputs.items()
+                    if isinstance(value, torch.Tensor)
+                }
+
+                autocast_context = (
+                    torch.autocast(device_type="cuda", enabled=amp_enabled and args.device.startswith("cuda"))
+                    if args.device.startswith("cuda")
+                    else nullcontext()
+                )
+                with autocast_context:
+                    features = extract_transformers_image_features(model, model_inputs)
+                    features = torch.nn.functional.normalize(features, dim=-1)
+
+                outputs.append(features.float().cpu())
+                kept_image_names.extend(valid_names)
 
     if not outputs:
         raise RuntimeError("No valid images were encoded. Check --img-list and image file integrity.")

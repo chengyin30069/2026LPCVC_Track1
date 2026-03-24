@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-coco-images",
         type=int,
-        default=82000,
+        default=100000,
         help="Maximum number of COCO images to include.",
     )
     parser.add_argument(
@@ -82,25 +82,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-vg-images",
         type=int,
-        default=70000,
+        default=120000,
         help="Maximum number of Visual Genome images to include.",
     )
     parser.add_argument(
         "--max-coco-captions-per-image",
         type=int,
-        default=2,
+        default=3,
         help="Maximum number of COCO captions kept per image.",
     )
     parser.add_argument(
         "--max-vg-regions-per-image",
         type=int,
-        default=0,
+        default=10,
         help="Maximum number of Visual Genome region phrases kept per image.",
+    )
+    parser.add_argument(
+        "--min-vg-regions-per-image",
+        type=int,
+        default=10,
+        help="Minimum number of valid Visual Genome region phrases required to keep an image.",
     )
     parser.add_argument(
         "--max-unique-texts",
         type=int,
-        default=250000,
+        default=500000,
         help="Upper bound for the global text pool to keep hard-negative mining manageable.",
     )
     parser.add_argument("--min-text-chars", type=int, default=6)
@@ -444,7 +450,10 @@ def append_coco_samples(
 def build_vg_image_lookup(image_dirs: list[Path]) -> dict[str, Path]:
     lookup: dict[str, Path] = {}
     for image_dir in image_dirs:
-        image_paths = sorted(image_dir.glob("*.jpg"))
+        image_paths: list[Path] = []
+        for pattern in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+            image_paths.extend(image_dir.rglob(pattern))
+        image_paths = sorted(image_paths)
         for image_path in tqdm(
             image_paths,
             total=len(image_paths),
@@ -458,6 +467,16 @@ def build_vg_image_lookup(image_dirs: list[Path]) -> dict[str, Path]:
 
 def main() -> None:
     args = parse_args()
+
+    if not args.skip_visual_genome and args.max_vg_regions_per_image <= 0:
+        raise ValueError(
+            "--max-vg-regions-per-image must be >= 1 when Visual Genome is enabled. "
+            "Set --skip-visual-genome to disable VG explicitly."
+        )
+    if not args.skip_visual_genome and args.min_vg_regions_per_image < 1:
+        raise ValueError("--min-vg-regions-per-image must be >= 1 when Visual Genome is enabled")
+    if args.min_vg_regions_per_image > args.max_vg_regions_per_image:
+        raise ValueError("--min-vg-regions-per-image must be <= --max-vg-regions-per-image")
 
     output_dir = Path(args.output_dir)
     images_dir = output_dir / "images"
@@ -532,6 +551,7 @@ def main() -> None:
         }
         vg_lookup = build_vg_image_lookup(vg_image_dirs)
         kept_images = 0
+        skipped_low_region_images = 0
         for sample in tqdm(
             region_descriptions,
             total=min(len(region_descriptions), args.max_vg_images),
@@ -550,7 +570,11 @@ def main() -> None:
                 normalized = normalize_text(phrase, args.min_text_chars, args.max_text_chars)
                 if normalized is not None:
                     texts.append(normalized)
-            texts = dedupe_preserve_order(texts)[:args.max_vg_regions_per_image]
+            texts = dedupe_preserve_order(texts)
+            if len(texts) < args.min_vg_regions_per_image:
+                skipped_low_region_images += 1
+                continue
+            texts = texts[:args.max_vg_regions_per_image]
             positive_ids = register_texts(
                 texts,
                 text_to_id=text_to_id,
@@ -578,7 +602,9 @@ def main() -> None:
 
         summary["sources"]["visual_genome"] = {
             "images": kept_images,
+            "min_regions_per_image": args.min_vg_regions_per_image,
             "regions_per_image": args.max_vg_regions_per_image,
+            "skipped_low_region_images": skipped_low_region_images,
             "region_descriptions_json": str(region_json),
         }
 

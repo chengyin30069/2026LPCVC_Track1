@@ -7,6 +7,7 @@ open-clip-torch
 pillow
 onnxscript
 tqdm
+matplotlib
 setuptools==81.0.0
 qai_hub
 qai_hub_models

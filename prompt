@@ -1,0 +1,29 @@
+目前的專案框架太過冗餘且多次調參都無法有效改進準確度，請你自由研究且重構整份專案(除部分要求的程式碼外)
+目標:
+在student model: laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K上從teacher model: google/siglip2-so400m-patch16-512蒸餾出更高的Image to text retrieval的Recall@10準確度，本地benchmark會由benchmark.py進行，請不要修改。已知teacher和student於本地benchmark的準度分別為0.4581, 0.4374，請你以蒸餾後準度達0.452以上為目標
+
+禁止修改的程式碼:
+export_onnx.py
+compile_and_profile.py
+inference.py
+local_inference_openclip.py
+local_inference.py
+upload_dataset.py
+utils/*
+等，其餘程式碼可以自由修改﹑刪除﹑重構
+
+請以以下論文做為參考
+https://arxiv.org/abs/2307.12732
+也有一些進階技巧我希望你可以考慮實作:
+1. Temperature tuning
+Teacher temp often higher (softer targets)
+Student temp learnable or fixed ~0.07
+2. Cross-batch / memory bank distillation
+Use large similarity matrix (important for CLIP)
+Mimics large batch training
+3. Hard negative emphasis
+Weight high-similarity negatives more
+Improves retrieval accuracy significantly
+4. Intermediate feature distillation
+Match transformer layers (especially for ViT)
+Useful if architectures differ
