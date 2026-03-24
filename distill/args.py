@@ -5,6 +5,67 @@ import argparse
 import torch
 
 
+def apply_clipkd_preset(args: argparse.Namespace) -> None:
+    preset = getattr(args, "clipkd_preset", "none")
+    if preset == "none":
+        return
+
+    # CLIP-KD paper-aligned defaults for this codebase:
+    # prefer FD + ICL (+ optional CRD), and disable weaker auxiliary KD terms.
+    args.learnable_temperature = True
+    args.weight_decay = 0.1
+
+    args.distill_weight = 0.0
+    args.distill_final_weight = 0.0
+    args.teacher_cosine_weight = 0.0
+    args.teacher_cosine_final_weight = 0.0
+
+    args.hard_negative_weight = 0.0
+    args.hard_negative_final_weight = 0.0
+    args.memory_bank_distill_weight = 0.0
+    args.memory_bank_distill_final_weight = 0.0
+    args.backbone_feature_distill_weight = 0.0
+    args.backbone_feature_distill_final_weight = 0.0
+    args.masked_feature_distill_weight = 0.0
+    args.masked_feature_distill_final_weight = 0.0
+    args.gradient_distill_weight = 0.0
+    args.gradient_distill_final_weight = 0.0
+    args.augmented_feature_distill_weight = 0.0
+    args.augmented_feature_distill_final_weight = 0.0
+    args.intermediate_distill_weight = 0.0
+    args.intermediate_distill_final_weight = 0.0
+
+    # Keep CLIP task objective and make FD/ICL contributions non-trivial.
+    args.contrastive_weight = 0.08
+    args.contrastive_final_weight = 0.08
+    args.feature_distill_weight = 2.5
+    args.feature_distill_final_weight = 2.5
+    args.icl_weight = 0.08
+    args.icl_final_weight = 0.04
+
+    # Keep a small non-zero anchor floor to reduce late embedding drift.
+    args.baseline_anchor_weight = 0.01
+    args.baseline_anchor_final_weight = 0.003
+
+    # CRD is optional in paper ablations; keep it only in fd-icl-crd preset.
+    if preset == "fd-icl-crd":
+        args.relation_distill_weight = 0.0
+        args.relation_distill_final_weight = 0.0
+        args.crd_weight = 2.0
+        args.crd_final_weight = 2.0
+    else:
+        args.relation_distill_weight = 0.0
+        args.relation_distill_final_weight = 0.0
+        args.crd_weight = 0.0
+        args.crd_final_weight = 0.0
+
+    # Paper runs are longer (32 epochs); upgrade from default short runs.
+    if args.epochs == 16:
+        args.epochs = 32
+    if args.warmup_steps == 600:
+        args.warmup_steps = 1000
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a distilled student image model for Track1.")
     parser.add_argument("--img-list", default="dataset/img_list.csv")
@@ -30,6 +91,15 @@ def parse_args() -> argparse.Namespace:
         default="hf-hub:laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K",
     )
     parser.add_argument("--output-dir", default="artifacts/student_distill_v6")
+    parser.add_argument(
+        "--clipkd-preset",
+        choices=["none", "fd-icl", "fd-icl-crd"],
+        default="none",
+        help=(
+            "Apply CLIP-KD paper-aligned loss presets. "
+            "fd-icl uses Feature Distillation + ICL; fd-icl-crd additionally enables CRD."
+        ),
+    )
     parser.add_argument("--resume-checkpoint", help="Optional checkpoint path to continue training from.")
     parser.add_argument(
         "--resume-optimizer-state",
@@ -413,7 +483,9 @@ def parse_args() -> argparse.Namespace:
         help="Optional file to save image names skipped due to missing teacher embeddings.",
     )
     parser.add_argument("--device", default="cuda:1" if torch.cuda.is_available() else "cpu")
-    return parser.parse_args()
+    args = parser.parse_args()
+    apply_clipkd_preset(args)
+    return args
 
 
 def validate_args(args: argparse.Namespace) -> None:

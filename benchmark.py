@@ -519,21 +519,21 @@ def main() -> None:
     if args.device.startswith("cuda"):
         torch.cuda.empty_cache()
 
-    teacher_model, teacher_tokenizer, teacher_preprocess = load_teacher_model(
-        args.teacher_model_id,
-        args.device,
-        args.teacher_backend,
-    )
-    results["teacher"] = evaluate_coco_recall_at10(
-         model=teacher_model,
-         tokenizer=teacher_tokenizer,
-         preprocess=teacher_preprocess,
-         args=args,
-         label="teacher",
-     )
-    del teacher_model
-    if args.device.startswith("cuda"):
-        torch.cuda.empty_cache()
+    # teacher_model, teacher_tokenizer, teacher_preprocess = load_teacher_model(
+    #     args.teacher_model_id,
+    #     args.device,
+    #     args.teacher_backend,
+    # )
+    # results["teacher"] = evaluate_coco_recall_at10(
+    #      model=teacher_model,
+    #      tokenizer=teacher_tokenizer,
+    #      preprocess=teacher_preprocess,
+    #      args=args,
+    #      label="teacher",
+    #  )
+    # del teacher_model
+    # if args.device.startswith("cuda"):
+    #     torch.cuda.empty_cache()
 
     student_model, student_tokenizer, student_preprocess = load_student_model(args.student_checkpoint, args.device)
     results["student"] = evaluate_coco_recall_at10(
@@ -549,7 +549,7 @@ def main() -> None:
 
     print("\nValidation Recall@10")
     print(f"baseline  : {results['baseline']:.6f}")
-    print(f"teacher   : {results['teacher']:.6f}")
+    # print(f"teacher   : {results['teacher']:.6f}")
     print(f"student   : {results['student']:.6f}")
     print("\nJSON summary")
     print(json.dumps(results, indent=2))

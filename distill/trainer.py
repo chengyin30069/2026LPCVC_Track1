@@ -382,6 +382,16 @@ def run_training(args) -> None:
         checkpoint_metric_mode = "min"
 
     best_checkpoint_metric = float("inf") if checkpoint_metric_mode == "min" else -float("inf")
+    if resume_payload is not None:
+        resume_best_metric_name = str(resume_payload.get("best_metric_name") or "")
+        resume_best_metric_value = resume_payload.get("best_metric_value")
+        if resume_best_metric_name == checkpoint_metric_name and resume_best_metric_value is not None:
+            best_checkpoint_metric = float(resume_best_metric_value)
+
+    # Early stopping follows the same metric as best checkpoint selection.
+    # Patience counts epochs where that metric is available but does not improve.
+    early_stop_patience = int(args.early_stop_patience)
+    early_stop_wait = 0
 
     print(f"Training samples: {len(train_dataset)}")
     if val_dataset is not None:
@@ -845,6 +855,7 @@ def run_training(args) -> None:
 
         if should_update_best:
             best_checkpoint_metric = float(checkpoint_metric_value)
+            early_stop_wait = 0
             save_training_checkpoint(
                 output_dir / "best_loss_checkpoint.pt",
                 student_model=student_model,
@@ -862,6 +873,17 @@ def run_training(args) -> None:
                 epoch=current_epoch,
                 contrastive_log_temperature=contrastive_log_temperature,
             )
+        elif checkpoint_metric_value is not None and not math.isnan(float(checkpoint_metric_value)):
+            early_stop_wait += 1
+
+        if early_stop_patience > 0 and early_stop_wait >= early_stop_patience:
+            print(
+                "Early stopping triggered: "
+                f"metric={checkpoint_metric_name}, patience={early_stop_patience}, "
+                f"best={best_checkpoint_metric:.6f}, last={float(checkpoint_metric_value):.6f}, "
+                f"epoch={current_epoch}"
+            )
+            break
 
     final_epoch = int(history[-1]["epoch"]) if history else total_target_epoch
     save_training_checkpoint(
