@@ -482,7 +482,11 @@ def parse_args() -> argparse.Namespace:
         "--missing-teacher-log",
         help="Optional file to save image names skipped due to missing teacher embeddings.",
     )
-    parser.add_argument("--device", default="cuda:1" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device",
+        default="cuda:1" if torch.cuda.is_available() else "cpu",
+        help="Device spec, e.g. cuda:1 or comma-separated cuda:0,cuda:1 for DataParallel.",
+    )
     args = parser.parse_args()
     apply_clipkd_preset(args)
     return args

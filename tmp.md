@@ -1,15 +1,26 @@
-```bash
-python train_student_distill.py --teacher-embeddings artifacts/teacher_image_embeddings_siglip2.npz --text-embeddings artifacts/text_embeddings.npz --teacher-text-embeddings artifacts/text_embeddings_teacher_siglip2.npz --output-dir artifacts/student-SiglipV2-FD-ICL-earlystop --epochs 24 --best-checkpoint-metric val-recall@10 --early-stop-patience 5 --val-recall-source coco --distill-loss-type mse --contrastive-weight 0.08 --distill-weight 0.90 --teacher-cosine-weight 0.0 --icl-weight 0.05 --icl-final-weight 0.05 --relation-distill-weight 0.0 --crd-weight 0.0 --hard-negative-weight 0.0 --hard-negative-final-weight 0.0 --memory-bank-distill-weight 0.0 --feature-distill-weight 0.01 --masked-feature-distill-weight 0.0 --gradient-distill-weight 0.0 --augmented-feature-distill-weight 0.0 --baseline-anchor-weight 0.01 --baseline-anchor-final-weight 0.002
-```
+python cache_text_embeddings.py --txt-list dataset/txt_list.csv --output artifacts/text_embeddings.npz --model-id hf-hub:laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K --backend open_clip --device cuda:0
 
-```bash
-python train_student_distill.py --teacher-embeddings artifacts/teacher_image_embeddings_siglip2.npz --text-embeddings artifacts/text_embeddings.npz --teacher-text-embeddings artifacts/text_embeddings_teacher_siglip2.npz --output-dir artifacts/student-SiglipV2-FD-ICL-CRD-earlystop --epochs 24 --best-checkpoint-metric val-recall@10 --early-stop-patience 5 --val-recall-source coco --distill-loss-type mse --contrastive-weight 0.08 --distill-weight 0.88 --teacher-cosine-weight 0.0 --icl-weight 0.05 --icl-final-weight 0.05 --relation-distill-weight 0.01 --relation-distill-final-weight 0.01 --crd-weight 0.01 --crd-final-weight 0.01 --hard-negative-weight 0.0 --hard-negative-final-weight 0.0 --memory-bank-distill-weight 0.0 --feature-distill-weight 0.01 --masked-feature-distill-weight 0.0 --gradient-distill-weight 0.0 --augmented-feature-distill-weight 0.0 --baseline-anchor-weight 0.01 --baseline-anchor-final-weight 0.002
-```
+python cache_text_embeddings.py --txt-list dataset/txt_list.csv --output artifacts/text_embeddings_teacher_siglip2.npz --model-id google/siglip2-so400m-patch16-512 --backend transformers --device cuda:1
 
-```bash
-python train_student_distill.py --teacher-embeddings artifacts/teacher_image_embeddings_siglip2.npz --text-embeddings artifacts/text_embeddings.npz --teacher-text-embeddings artifacts/text_embeddings_teacher_siglip2.npz --output-dir artifacts/student-SiglipV2-FD-ICL-lowICL-cocoVal --epochs 24 --best-checkpoint-metric val-recall@10 --early-stop-patience 5 --val-recall-source coco --distill-loss-type mse --contrastive-weight 0.08 --distill-weight 0.90 --icl-weight 0.02 --icl-final-weight 0.01 --relation-distill-weight 0.0 --crd-weight 0.0 --hard-negative-weight 0.0 --memory-bank-distill-weight 0.0 --masked-feature-distill-weight 0.0 --gradient-distill-weight 0.0 --augmented-feature-distill-weight 0.0 --baseline-anchor-weight 0.01 --baseline-anchor-final-weight 0.003
-```
+python precompute_teacher_embeddings.py \
+--img-list dataset/img_list.csv \
+--image-folder dataset/images \
+--output artifacts/teacher_image_embeddings_siglip2.npz \
+--model-id google/siglip2-so400m-patch16-512 \
+--backend transformers \
+--devices cuda:0,cuda:1 \
+--batch-size 320 \
+--num-workers 12 \
+--prefetch-factor 4 \
+--max-loader-buffer-gb 12 \
+--decoder auto \
+--channels-last \
+--attn-impl sdpa \
+--model-dtype float16 \
+--output-dtype float32
 
-```bash
-python train_student_distill.py --clipkd-preset fd-icl --teacher-embeddings artifacts/teacher_image_embeddings_siglip2.npz --text-embeddings artifacts/text_embeddings.npz --teacher-text-embeddings artifacts/text_embeddings_teacher_siglip2.npz --train-source coco --val-recall-source coco --best-checkpoint-metric val-recall@10 --early-stop-patience 7 --save-epoch-checkpoints --output-dir artifacts/student-SiglipV2-PaperFDICL-coco
-```
+
+
+python mine_hard_negatives.py --embeddings artifacts/text_embeddings.npz --output artifacts/hard_negatives.npz --csv-output artifacts/hard_negatives.csv --top-k 10
+
+python train_student_distill.py --img-list dataset/img_list.csv --image-folder dataset/images --text-embeddings artifacts/text_embeddings.npz --teacher-embeddings artifacts/teacher_image_embeddings_siglip2.npz --teacher-text-embeddings artifacts/text_embeddings_teacher_siglip2.npz --hard-negatives artifacts/hard_negatives.npz --output-dir artifacts/student_stage2_text_align_30m --device cuda:0,cuda:1

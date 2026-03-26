@@ -41,6 +41,34 @@ from .losses import compute_losses, evaluate_val_recall_at_k
 from .optim import build_cosine_scheduler, interpolate_weight
 
 
+class EncodeImageForward(nn.Module):
+    def __init__(self, clip_model: nn.Module):
+        super().__init__()
+        self.clip_model = clip_model
+
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        return self.clip_model.encode_image(pixel_values)
+
+
+def parse_device_spec(device_spec: str) -> tuple[str, list[int]]:
+    parts = [segment.strip() for segment in device_spec.split(",") if segment.strip()]
+    if not parts:
+        raise ValueError("--device cannot be empty")
+    primary = parts[0]
+    if not primary.startswith("cuda"):
+        return primary, []
+
+    device_ids: list[int] = []
+    for part in parts:
+        if not part.startswith("cuda"):
+            raise ValueError(f"Mixed non-cuda device in --device: {device_spec}")
+        if ":" in part:
+            device_ids.append(int(part.split(":", 1)[1]))
+        else:
+            device_ids.append(0)
+    return primary, device_ids
+
+
 def is_openclip_compatible_model_id(model_id: str) -> bool:
     lowered = model_id.lower()
     return not (lowered.startswith("google/siglip") or lowered.startswith("google/siglip2"))
@@ -99,6 +127,9 @@ def save_training_checkpoint(
 
 def run_training(args) -> None:
     validate_args(args)
+
+    primary_device, device_ids = parse_device_spec(args.device)
+    args.device = primary_device
 
     contrastive_final_weight = args.contrastive_weight if args.contrastive_final_weight is None else args.contrastive_final_weight
     distill_final_weight = args.distill_weight if args.distill_final_weight is None else args.distill_final_weight
@@ -195,6 +226,15 @@ def run_training(args) -> None:
     if args.gradient_checkpointing and hasattr(student_model.clip_model, "set_grad_checkpointing"):
         student_model.clip_model.set_grad_checkpointing(True)
 
+    use_data_parallel = args.device.startswith("cuda") and len(device_ids) > 1
+    student_backbone_parallel = None
+    reference_backbone_parallel = None
+    teacher_intermediate_parallel = None
+    if use_data_parallel:
+        student_backbone_parallel = nn.DataParallel(EncodeImageForward(student_model.clip_model), device_ids=device_ids)
+        reference_backbone_parallel = nn.DataParallel(EncodeImageForward(reference_model.clip_model), device_ids=device_ids)
+        print(f"Enabled DataParallel backbone encoding on devices: {device_ids} (primary={args.device})")
+
     intermediate_distill_enabled = args.intermediate_distill_weight > 0 or intermediate_distill_final_weight > 0
     teacher_intermediate_model = None
     student_block_recorder = None
@@ -221,6 +261,8 @@ def run_training(args) -> None:
         teacher_intermediate_model = teacher_intermediate_model.to(args.device).eval()
         for parameter in teacher_intermediate_model.parameters():
             parameter.requires_grad = False
+        if use_data_parallel:
+            teacher_intermediate_parallel = nn.DataParallel(EncodeImageForward(teacher_intermediate_model), device_ids=device_ids)
 
         student_blocks = get_vision_blocks(student_model.clip_model)
         teacher_blocks = get_vision_blocks(teacher_intermediate_model)
@@ -557,11 +599,20 @@ def run_training(args) -> None:
             with autocast_context:
                 with torch.no_grad():
                     if apply_intermediate_distill:
-                        teacher_intermediate_model.encode_image(pixel_values)
-                    reference_backbone_features = reference_model.encode_backbone(pixel_values)
+                        if teacher_intermediate_parallel is not None:
+                            teacher_intermediate_parallel(pixel_values)
+                        else:
+                            teacher_intermediate_model.encode_image(pixel_values)
+                    if reference_backbone_parallel is not None:
+                        reference_backbone_features = reference_backbone_parallel(pixel_values)
+                    else:
+                        reference_backbone_features = reference_model.encode_backbone(pixel_values)
                     reference_embeddings = reference_model.projection_head(reference_backbone_features)
 
-                student_backbone_features = student_model.encode_backbone(pixel_values)
+                if student_backbone_parallel is not None:
+                    student_backbone_features = student_backbone_parallel(pixel_values)
+                else:
+                    student_backbone_features = student_model.encode_backbone(pixel_values)
                 student_embeddings = student_model.projection_head(student_backbone_features)
 
                 current_temperature = contrastive_log_temperature.exp().clamp(min=args.min_temperature, max=args.max_temperature)
@@ -731,10 +782,19 @@ def run_training(args) -> None:
 
                     with autocast_context:
                         if apply_intermediate_distill_val:
-                            teacher_intermediate_model.encode_image(pixel_values)
-                        reference_backbone_features = reference_model.encode_backbone(pixel_values)
+                            if teacher_intermediate_parallel is not None:
+                                teacher_intermediate_parallel(pixel_values)
+                            else:
+                                teacher_intermediate_model.encode_image(pixel_values)
+                        if reference_backbone_parallel is not None:
+                            reference_backbone_features = reference_backbone_parallel(pixel_values)
+                        else:
+                            reference_backbone_features = reference_model.encode_backbone(pixel_values)
                         reference_embeddings = reference_model.projection_head(reference_backbone_features)
-                        student_backbone_features = student_model.encode_backbone(pixel_values)
+                        if student_backbone_parallel is not None:
+                            student_backbone_features = student_backbone_parallel(pixel_values)
+                        else:
+                            student_backbone_features = student_model.encode_backbone(pixel_values)
                         student_embeddings = student_model.projection_head(student_backbone_features)
 
                         val_loss, val_metrics = compute_losses(
