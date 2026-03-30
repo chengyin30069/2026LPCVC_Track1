@@ -21,12 +21,12 @@ device = qai_hub.Device("XR2 Gen 2 (Proxy)")
 # TODO: Define tasks with their corresponding compiled job IDs and dataset IDs
 tasks = {
     "text": {
-        "compiled_id": "",
-        "dataset_id": ""
+        "compiled_id": "j5wdqelmg",
+        "dataset_id": "d9pgeq4n9"
     },
     "image": {
-        "compiled_id": "",
-        "dataset_id": ""
+        "compiled_id": "jgzxr3lx5",
+        "dataset_id": "d7d45ed87"
     }
 }
 

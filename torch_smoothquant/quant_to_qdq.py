@@ -191,7 +191,7 @@ def convert_fp_onnx_to_qdq(
     print(f"QDQ ONNX saved to: {qdq_onnx_path}")
 
 ONNX_PATH = "exported_onnx"
-CALIBRATION_DATASET_PATH = "../coco2017/train2017"
+CALIBRATION_DATASET_PATH = "./coco2017/train2017"
 
 if __name__ == "__main__":
     convert_fp_onnx_to_qdq(

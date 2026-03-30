@@ -2,7 +2,7 @@
 import onnx
 from collections import Counter
 
-model = onnx.load("image_encoder_qdq.onnx")
+model = onnx.load("./exported_onnx/image_encoder_qdq.onnx")
 ops = Counter(node.op_type for node in model.graph.node)
 
 print("Top ops:")

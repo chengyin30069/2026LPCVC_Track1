@@ -1,4 +1,6 @@
 exported_onnx/
+quantize/calibration/
+models/
 dataset/
 ids.txt
 .python-version

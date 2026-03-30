@@ -5,14 +5,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torchvision.datasets import CocoCaptions
 from PIL import Image
-from transformers import CLIPVisionModelWithProjection, AutoProcessor
+
+import open_clip
 
 import os
 from pathlib import Path
 import numpy as np
 
 from pathlib import Path
+
+from tqdm import tqdm
+
+BATCH_SIZE = 32
+EPOCHS = 1
+NUM_WORKERS = 8
+LR = 2e-5
+WD = 0.05
+AMP = True
+
+
+
 
 # =========================
 # 1. fake quant functions
@@ -67,14 +81,17 @@ class SmoothQuantLinearFakeQuant(nn.Module):
         else:
             self.bias = None
 
+        self.calibrated = False
+
         self.register_buffer("smooth_scale", torch.ones(self.in_features))
         self.register_buffer("act_channel_max", torch.zeros(self.in_features))
-        self.register_buffer("calibrated", torch.tensor(False))
+        # self.register_buffer("calibrated", torch.tensor(False))
 
     @torch.no_grad()
     def update_activation_stats(self, x: torch.Tensor):
         # x: [B, C] or [B, N, C]
         x_absmax = x.detach().abs().reshape(-1, x.shape[-1]).amax(dim=0)
+        self.act_channel_max = self.act_channel_max.to('cuda')
         self.act_channel_max.copy_(torch.maximum(self.act_channel_max, x_absmax))
 
     @torch.no_grad()
@@ -84,7 +101,7 @@ class SmoothQuantLinearFakeQuant(nn.Module):
         s = (a_channel_max ** self.alpha) / (w_channel_max ** (1.0 - self.alpha))
         s = torch.clamp(s, min=eps)
         self.smooth_scale.copy_(s)
-        self.calibrated.fill_(True)
+        self.calibrated = True
 
     def forward(self, x: torch.Tensor):
         # calibration 階段：先走原始 FP linear
@@ -118,6 +135,23 @@ class SmoothLinear(nn.Module):
         x = x / s
         w = self.weight * s.unsqueeze(0)
         return F.linear(x, w, self.bias)
+
+
+class CocoClipDataset(torch.utils.data.Dataset):
+    def __init__(self, img_dir, cap_json, img_tf, tokenizer):
+        self.ds = CocoCaptions(root=img_dir, annFile=cap_json)
+        self.img_tf = img_tf
+        self.tokenizer = tokenizer
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        img, caps = self.ds[idx]
+        cap = caps[torch.randint(low=0, high=len(caps), size=(1,)).item()]
+        img = self.img_tf(img)
+        tokens = self.tokenizer([cap])[0]
+        return img, tokens
 
 
 # =========================
@@ -255,6 +289,8 @@ def prepare_smoothquant_fake_model(
     for h in hooks:
         h.remove()
 
+    qmodel.to(device)
+
     finalize_smoothquant_scales(qmodel)
     return qmodel
 
@@ -294,8 +330,8 @@ class ImageFolderListDataset(Dataset):
 @torch.no_grad()
 def get_embedding(model, batch, device):
     pixel_values = batch["pixel_values"].to(device)
-    out = model(pixel_values=pixel_values)
-    emb = out.image_embeds
+    out = model(pixel_values)
+    emb = out
     emb = emb / emb.norm(dim=-1, keepdim=True).clamp_min(1e-12)
     return emb
 
@@ -320,32 +356,76 @@ def compare_models(fp_model, q_model, dataloader, device="cuda", max_batches=10)
     print("mean cosine:", sum(cos_list) / len(cos_list))
 
 
+def clip_contrastive_loss(image_features, text_features, logit_scale):
+    image_features = F.normalize(image_features, dim=-1)
+    text_features = F.normalize(text_features, dim=-1)
+    logits = logit_scale * (image_features @ text_features.t())
+    targets = torch.arange(logits.size(0), device=logits.device)
+    loss_i = F.cross_entropy(logits, targets)
+    loss_t = F.cross_entropy(logits.t(), targets)
+    return (loss_i + loss_t) / 2
+
+def  run_training(clip_model, train_loader, epoch):
+    clip_model.train()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    params = [p for p in clip_model.parameters() if p.requires_grad]
+    optim = torch.optim.AdamW(params, lr=LR, weight_decay=WD)
+    scaler = torch.amp.GradScaler("cuda", enabled=(AMP and device == "cuda"))
+
+    # 7) train
+    for epoch in range(EPOCHS):
+        for it, (images, tokens) in tqdm(enumerate(train_loader), total=len(train_loader)):
+            images = images.to(device, non_blocking=True)
+            tokens = tokens.to(device, non_blocking=True)
+
+            optim.zero_grad(set_to_none=True)
+
+            with torch.amp.autocast("cuda", enabled=(AMP and device == "cuda")):
+                img_feat = clip_model.encode_image(images)
+                txt_feat = clip_model.encode_text(tokens)
+                logit_scale = clip_model.logit_scale.exp().clamp(max=100)
+                loss = clip_contrastive_loss(img_feat, txt_feat, logit_scale)
+
+            scaler.scale(loss).backward()
+            scaler.step(optim)
+            scaler.update()
+
+            if it % 50 == 0:
+                print(f"epoch {epoch} iter {it} loss {loss.item():.4f} logit_scale {logit_scale.item():.2f}")
+    return clip_model
+
+
+
 # =========================
 # 8. main
 # =========================
 
 ONNX_DIR = "exported_onnx"
-CALIBRATION_DATASET_PATH = "../coco2017/train2017"
+CALIBRATION_DATASET_PATH = "./coco2017/train2017"
+
+
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_name = "openai/clip-vit-base-patch32"
+    model_name = "hf-hub:laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K"
 
     # 你要改成自己的圖片路徑
     image_paths = [Path(CALIBRATION_DATASET_PATH) / f for f in os.listdir(CALIBRATION_DATASET_PATH)][:1024]
 
-    fp_model = CLIPVisionModelWithProjection.from_pretrained(model_name).to(device).eval()
+    clip_model, preprocess_train, _ = open_clip.create_model_and_transforms(model_name)
+    clip_model.to(device).eval()
+    tokenizer = open_clip.get_tokenizer(model_name)
 
     dataset = ImageFolderListDataset(image_paths)
     loader = DataLoader(dataset, batch_size=2, shuffle=False, num_workers=0)
 
     def forward_fn(model, batch):
         pixel_values = batch["pixel_values"].to(device)
-        return model(pixel_values=pixel_values)
+        return model(pixel_values)
 
     print("Calibrating SmoothQuant fake model...")
     q_model = prepare_smoothquant_fake_model(
-        image_encoder=fp_model,
+        image_encoder=clip_model.visual,
         calibration_dataloader=loader,
         forward_fn=forward_fn,
         device=device,
@@ -357,14 +437,39 @@ def main():
     )
     
     print("Comparing FP vs SmoothQuant fake quant...")
-    compare_models(fp_model, q_model, loader, device=device)
+    compare_models(clip_model.visual, q_model, loader, device=device)
+    golden_model = copy.deepcopy(clip_model.visual)
+
+    clip_model.visual = copy.deepcopy(q_model)
 
     q_model = convert_smoothquant_fake_to_smooth(q_model)
 
-    save_path = Path(ONNX_DIR) / "smoothquant_image_encoder.onnx"
+    for p in clip_model.transformer.parameters():
+        p.requires_grad = False
+    clip_model.logit_scale.requires_grad = True
 
+
+    # 5) data
+    train_set = CocoClipDataset('./coco2017/train2017', './coco2017/annotations/captions_train2017.json', preprocess_train, tokenizer)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=NUM_WORKERS,
+        pin_memory=True,
+        drop_last=True,
+    )
+
+    run_training(clip_model, train_loader, 1)
+
+    compare_models(clip_model.visual, golden_model, loader, device=device)
+
+
+
+
+    save_path = Path(ONNX_DIR) / "smoothquant_image_encoder.onnx"
     torch.onnx.export(
-        q_model,
+        clip_model.visual,
         torch.randn(1, 3, 224, 224).to(device),
         save_path,
         input_names=["image"],

@@ -32,7 +32,7 @@ def resolve_onnx_paths(args: argparse.Namespace) -> tuple[Path, Path | None]:
     elif metadata and metadata.get("image_onnx"):
         image_path = Path(str(metadata["image_onnx"]))
     else:
-        image_path = Path(args.onnx_dir) / "student_image_encoder.onnx"
+        image_path = Path(args.onnx_dir) / "image_encoder_qdq.onnx"
 
     text_path: Path | None
     if args.skip_text:
