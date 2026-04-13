@@ -210,6 +210,18 @@ def resolve_image_decoder(requested_decoder: str) -> str:
     return requested_decoder
 
 
+def stabilize_decoder_for_loader(
+    *,
+    decoder: str,
+    loader_workers: int,
+    device_count: int,
+) -> str:
+    # OpenCV + multiprocessing can deadlock in long runs on some systems.
+    if decoder == "opencv" and loader_workers > 0 and device_count > 1:
+        return "pil"
+    return decoder
+
+
 def resolve_model_dtype(requested_dtype: str, *, device: str) -> torch.dtype | None:
     if requested_dtype == "auto":
         if device.startswith("cuda"):
@@ -284,6 +296,21 @@ def tune_loader_parallelism(
     estimated_bytes = effective_workers * effective_prefetch * bytes_per_batch
     estimated_gb = estimated_bytes / (1024**3)
     return effective_workers, effective_prefetch, estimated_gb
+
+
+def dataloader_worker_init(_worker_id: int) -> None:
+    if cv2 is not None:
+        cv2.setNumThreads(1)
+        if hasattr(cv2, "ocl"):
+            cv2.ocl.setUseOpenCL(False)
+
+
+def shutdown_dataloader_workers(loader: DataLoader | None) -> None:
+    if loader is None:
+        return
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is not None and hasattr(iterator, "_shutdown_workers"):
+        iterator._shutdown_workers()
 
 
 def resolve_attn_implementation(requested_attn: str, *, device: str) -> str | None:
@@ -376,6 +403,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=12.0,
         help="Cap estimated DataLoader in-flight host buffer (workers*prefetch*batch) to avoid OOM kills.",
+    )
+    parser.add_argument(
+        "--loader-timeout",
+        type=float,
+        default=120.0,
+        help="Seconds to wait for a DataLoader batch before raising an error. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--no-persistent-workers",
+        action="store_true",
+        help="Disable persistent DataLoader workers for better long-run robustness.",
     )
     parser.add_argument(
         "--decoder",
@@ -501,104 +539,130 @@ def main() -> None:
             preprocess=preprocess,
             max_loader_buffer_gb=args.max_loader_buffer_gb,
         )
+        effective_decoder = stabilize_decoder_for_loader(
+            decoder=decoder,
+            loader_workers=loader_workers,
+            device_count=len(devices),
+        )
+        if effective_decoder != decoder:
+            print(
+                f"Decoder switched for stability: {decoder} -> {effective_decoder} "
+                "(multi-worker + multi-device)"
+            )
+            dataset.decoder = effective_decoder
         if num_workers > 0:
             print(
                 f"Loader effective workers/prefetch: {loader_workers}/{loader_prefetch} "
                 f"(requested {num_workers}/{args.prefetch_factor}, est in-flight {est_loader_gb:.2f} GB)"
             )
+        persistent_workers = (
+            loader_workers > 0 and not args.no_persistent_workers and dataset.decoder != "opencv"
+        )
         loader = DataLoader(
             dataset,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=loader_workers,
             pin_memory=is_cuda,
-            persistent_workers=loader_workers > 0,
+            persistent_workers=persistent_workers,
             prefetch_factor=loader_prefetch if loader_workers > 0 else None,
+            timeout=args.loader_timeout if loader_workers > 0 else 0,
+            worker_init_fn=dataloader_worker_init if loader_workers > 0 else None,
             collate_fn=collate_teacher_batch,
         )
 
-        with torch.inference_mode():
-            use_prefetcher = is_cuda and len(devices) == 1
-            batch_iter = (
-                CUDAPrefetcher(loader, device=primary_device, channels_last=args.channels_last)
-                if use_prefetcher
-                else loader
-            )
-            batch_iter = iter(batch_iter)
-            total_valid_images = 0
-            start_time = time.perf_counter()
-            data_wait_total = 0.0
-            compute_total = 0.0
-            cpu_copy_total = 0.0
-            profiled_batches = 0
-            progress = tqdm(total=len(loader), desc="Encoding teacher images", unit="batch", dynamic_ncols=True)
-            while True:
-                wait_start = time.perf_counter()
-                try:
-                    packed_batch, invalid_samples = next(batch_iter)
-                except StopIteration:
-                    break
-                data_wait = time.perf_counter() - wait_start
-                progress.update(1)
-                for sample in invalid_samples:
-                    failed_samples.append((str(sample["image_name"]), str(sample["error"])))
-
-                if packed_batch is None:
-                    continue
-
-                pixel_values = packed_batch["pixel_values"]
-                sample_count = int(pixel_values.shape[0])
-                chunk_sizes = [sample_count // len(devices)] * len(devices)
-                for idx in range(sample_count % len(devices)):
-                    chunk_sizes[idx] += 1
-                pixel_chunks = list(torch.split(pixel_values, chunk_sizes, dim=0))
-
-                compute_start = time.perf_counter()
-                batch_outputs: list[torch.Tensor] = []
-                for device_name, chunk in zip(devices, pixel_chunks):
-                    if chunk.numel() == 0:
-                        continue
-                    chunk = chunk.to(device_name, non_blocking=is_cuda)
-                    if args.channels_last and device_name.startswith("cuda"):
-                        chunk = chunk.contiguous(memory_format=torch.channels_last)
-                    autocast_context = (
-                        torch.autocast(device_type="cuda", enabled=amp_enabled and device_name.startswith("cuda"))
-                        if device_name.startswith("cuda")
-                        else nullcontext()
-                    )
-                    with autocast_context:
-                        features = model_by_device[device_name].encode_image(chunk)
-                        features = torch.nn.functional.normalize(features, dim=-1)
-                    batch_outputs.append(features)
-                should_profile = args.profile_steps > 0 and profiled_batches < args.profile_steps
-                if should_profile and is_cuda:
-                    for device_name in devices:
-                        if device_name.startswith("cuda"):
-                            torch.cuda.synchronize(device=device_name)
-                compute_end = time.perf_counter()
-
-                cpu_copy_start = time.perf_counter()
-                outputs.extend(batch_outputs)
-                cpu_copy_end = time.perf_counter()
-
-                kept_image_names.extend(packed_batch["image_names"])
-                total_valid_images += len(packed_batch["image_names"])
-                if should_profile:
-                    data_wait_total += data_wait
-                    compute_total += compute_end - compute_start
-                    cpu_copy_total += cpu_copy_end - cpu_copy_start
-                    profiled_batches += 1
-            progress.close()
-            elapsed = max(1e-6, time.perf_counter() - start_time)
-            print(f"Encoding throughput: {total_valid_images / elapsed:.2f} images/s")
-            if profiled_batches > 0:
-                print(
-                    "Profile avg per batch "
-                    f"(first {profiled_batches}): "
-                    f"data_wait={data_wait_total / profiled_batches:.4f}s, "
-                    f"compute={compute_total / profiled_batches:.4f}s, "
-                    f"queue={cpu_copy_total / profiled_batches:.6f}s"
+        try:
+            with torch.inference_mode():
+                use_prefetcher = is_cuda and len(devices) == 1
+                batch_iter = (
+                    CUDAPrefetcher(loader, device=primary_device, channels_last=args.channels_last)
+                    if use_prefetcher
+                    else loader
                 )
+                batch_iter = iter(batch_iter)
+                total_valid_images = 0
+                start_time = time.perf_counter()
+                data_wait_total = 0.0
+                compute_total = 0.0
+                cpu_copy_total = 0.0
+                profiled_batches = 0
+                progress = tqdm(total=len(loader), desc="Encoding teacher images", unit="batch", dynamic_ncols=True)
+                while True:
+                    wait_start = time.perf_counter()
+                    try:
+                        packed_batch, invalid_samples = next(batch_iter)
+                    except StopIteration:
+                        break
+                    data_wait = time.perf_counter() - wait_start
+                    progress.update(1)
+                    for sample in invalid_samples:
+                        failed_samples.append((str(sample["image_name"]), str(sample["error"])))
+
+                    if packed_batch is None:
+                        continue
+
+                    pixel_values = packed_batch["pixel_values"]
+                    sample_count = int(pixel_values.shape[0])
+                    chunk_sizes = [sample_count // len(devices)] * len(devices)
+                    for idx in range(sample_count % len(devices)):
+                        chunk_sizes[idx] += 1
+                    pixel_chunks = list(torch.split(pixel_values, chunk_sizes, dim=0))
+
+                    compute_start = time.perf_counter()
+                    batch_outputs: list[torch.Tensor] = []
+                    for device_name, chunk in zip(devices, pixel_chunks):
+                        if chunk.numel() == 0:
+                            continue
+                        chunk = chunk.to(device_name, non_blocking=is_cuda)
+                        if args.channels_last and device_name.startswith("cuda"):
+                            chunk = chunk.contiguous(memory_format=torch.channels_last)
+                        autocast_context = (
+                            torch.autocast(device_type="cuda", enabled=amp_enabled and device_name.startswith("cuda"))
+                            if device_name.startswith("cuda")
+                            else nullcontext()
+                        )
+                        with autocast_context:
+                            features = model_by_device[device_name].encode_image(chunk)
+                            features = torch.nn.functional.normalize(features, dim=-1)
+                        batch_outputs.append(features)
+                    should_profile = args.profile_steps > 0 and profiled_batches < args.profile_steps
+                    if should_profile and is_cuda:
+                        for device_name in devices:
+                            if device_name.startswith("cuda"):
+                                torch.cuda.synchronize(device=device_name)
+                    compute_end = time.perf_counter()
+
+                    cpu_copy_start = time.perf_counter()
+                    outputs.extend(
+                        [
+                            feature.to("cpu", non_blocking=is_cuda)
+                            if feature.device.type == "cuda"
+                            else feature
+                            for feature in batch_outputs
+                        ]
+                    )
+                    cpu_copy_end = time.perf_counter()
+
+                    kept_image_names.extend(packed_batch["image_names"])
+                    total_valid_images += len(packed_batch["image_names"])
+                    if should_profile:
+                        data_wait_total += data_wait
+                        compute_total += compute_end - compute_start
+                        cpu_copy_total += cpu_copy_end - cpu_copy_start
+                        profiled_batches += 1
+                progress.close()
+                elapsed = max(1e-6, time.perf_counter() - start_time)
+                print(f"Encoding throughput: {total_valid_images / elapsed:.2f} images/s")
+                if profiled_batches > 0:
+                    print(
+                        "Profile avg per batch "
+                        f"(first {profiled_batches}): "
+                        f"data_wait={data_wait_total / profiled_batches:.4f}s, "
+                        f"compute={compute_total / profiled_batches:.4f}s, "
+                        f"queue={cpu_copy_total / profiled_batches:.6f}s"
+                    )
+        finally:
+            shutdown_dataloader_workers(loader)
     else:
         from transformers import AutoModel, AutoProcessor
 
@@ -631,104 +695,130 @@ def main() -> None:
             preprocess=preprocess_transformers,
             max_loader_buffer_gb=args.max_loader_buffer_gb,
         )
+        effective_decoder = stabilize_decoder_for_loader(
+            decoder=decoder,
+            loader_workers=loader_workers,
+            device_count=len(devices),
+        )
+        if effective_decoder != decoder:
+            print(
+                f"Decoder switched for stability: {decoder} -> {effective_decoder} "
+                "(multi-worker + multi-device)"
+            )
+            dataset.decoder = effective_decoder
         if num_workers > 0:
             print(
                 f"Loader effective workers/prefetch: {loader_workers}/{loader_prefetch} "
                 f"(requested {num_workers}/{args.prefetch_factor}, est in-flight {est_loader_gb:.2f} GB)"
             )
+        persistent_workers = (
+            loader_workers > 0 and not args.no_persistent_workers and dataset.decoder != "opencv"
+        )
         loader = DataLoader(
             dataset,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=loader_workers,
             pin_memory=is_cuda,
-            persistent_workers=loader_workers > 0,
+            persistent_workers=persistent_workers,
             prefetch_factor=loader_prefetch if loader_workers > 0 else None,
+            timeout=args.loader_timeout if loader_workers > 0 else 0,
+            worker_init_fn=dataloader_worker_init if loader_workers > 0 else None,
             collate_fn=collate_teacher_batch,
         )
 
-        with torch.inference_mode():
-            use_prefetcher = is_cuda and len(devices) == 1
-            batch_iter = (
-                CUDAPrefetcher(loader, device=primary_device, channels_last=args.channels_last)
-                if use_prefetcher
-                else loader
-            )
-            batch_iter = iter(batch_iter)
-            total_valid_images = 0
-            start_time = time.perf_counter()
-            data_wait_total = 0.0
-            compute_total = 0.0
-            cpu_copy_total = 0.0
-            profiled_batches = 0
-            progress = tqdm(total=len(loader), desc="Encoding teacher images", unit="batch", dynamic_ncols=True)
-            while True:
-                wait_start = time.perf_counter()
-                try:
-                    packed_batch, invalid_samples = next(batch_iter)
-                except StopIteration:
-                    break
-                data_wait = time.perf_counter() - wait_start
-                progress.update(1)
-                for sample in invalid_samples:
-                    failed_samples.append((str(sample["image_name"]), str(sample["error"])))
-
-                if packed_batch is None:
-                    continue
-
-                pixel_values = packed_batch["pixel_values"]
-                sample_count = int(pixel_values.shape[0])
-                chunk_sizes = [sample_count // len(devices)] * len(devices)
-                for idx in range(sample_count % len(devices)):
-                    chunk_sizes[idx] += 1
-                pixel_chunks = list(torch.split(pixel_values, chunk_sizes, dim=0))
-
-                compute_start = time.perf_counter()
-                batch_outputs: list[torch.Tensor] = []
-                for device_name, chunk in zip(devices, pixel_chunks):
-                    if chunk.numel() == 0:
-                        continue
-                    chunk = chunk.to(device_name, non_blocking=is_cuda)
-                    if args.channels_last and device_name.startswith("cuda"):
-                        chunk = chunk.contiguous(memory_format=torch.channels_last)
-                    model_inputs = {"pixel_values": chunk}
-                    autocast_context = (
-                        torch.autocast(device_type="cuda", enabled=amp_enabled and device_name.startswith("cuda"))
-                        if device_name.startswith("cuda")
-                        else nullcontext()
-                    )
-                    with autocast_context:
-                        features = extract_transformers_image_features(model_by_device[device_name], model_inputs)
-                        features = torch.nn.functional.normalize(features, dim=-1)
-                    batch_outputs.append(features)
-                should_profile = args.profile_steps > 0 and profiled_batches < args.profile_steps
-                if should_profile and is_cuda:
-                    for device_name in devices:
-                        if device_name.startswith("cuda"):
-                            torch.cuda.synchronize(device=device_name)
-                compute_end = time.perf_counter()
-
-                cpu_copy_start = time.perf_counter()
-                outputs.extend(batch_outputs)
-                cpu_copy_end = time.perf_counter()
-                kept_image_names.extend(packed_batch["image_names"])
-                total_valid_images += len(packed_batch["image_names"])
-                if should_profile:
-                    data_wait_total += data_wait
-                    compute_total += compute_end - compute_start
-                    cpu_copy_total += cpu_copy_end - cpu_copy_start
-                    profiled_batches += 1
-            progress.close()
-            elapsed = max(1e-6, time.perf_counter() - start_time)
-            print(f"Encoding throughput: {total_valid_images / elapsed:.2f} images/s")
-            if profiled_batches > 0:
-                print(
-                    "Profile avg per batch "
-                    f"(first {profiled_batches}): "
-                    f"data_wait={data_wait_total / profiled_batches:.4f}s, "
-                    f"compute={compute_total / profiled_batches:.4f}s, "
-                    f"queue={cpu_copy_total / profiled_batches:.6f}s"
+        try:
+            with torch.inference_mode():
+                use_prefetcher = is_cuda and len(devices) == 1
+                batch_iter = (
+                    CUDAPrefetcher(loader, device=primary_device, channels_last=args.channels_last)
+                    if use_prefetcher
+                    else loader
                 )
+                batch_iter = iter(batch_iter)
+                total_valid_images = 0
+                start_time = time.perf_counter()
+                data_wait_total = 0.0
+                compute_total = 0.0
+                cpu_copy_total = 0.0
+                profiled_batches = 0
+                progress = tqdm(total=len(loader), desc="Encoding teacher images", unit="batch", dynamic_ncols=True)
+                while True:
+                    wait_start = time.perf_counter()
+                    try:
+                        packed_batch, invalid_samples = next(batch_iter)
+                    except StopIteration:
+                        break
+                    data_wait = time.perf_counter() - wait_start
+                    progress.update(1)
+                    for sample in invalid_samples:
+                        failed_samples.append((str(sample["image_name"]), str(sample["error"])))
+
+                    if packed_batch is None:
+                        continue
+
+                    pixel_values = packed_batch["pixel_values"]
+                    sample_count = int(pixel_values.shape[0])
+                    chunk_sizes = [sample_count // len(devices)] * len(devices)
+                    for idx in range(sample_count % len(devices)):
+                        chunk_sizes[idx] += 1
+                    pixel_chunks = list(torch.split(pixel_values, chunk_sizes, dim=0))
+
+                    compute_start = time.perf_counter()
+                    batch_outputs: list[torch.Tensor] = []
+                    for device_name, chunk in zip(devices, pixel_chunks):
+                        if chunk.numel() == 0:
+                            continue
+                        chunk = chunk.to(device_name, non_blocking=is_cuda)
+                        if args.channels_last and device_name.startswith("cuda"):
+                            chunk = chunk.contiguous(memory_format=torch.channels_last)
+                        model_inputs = {"pixel_values": chunk}
+                        autocast_context = (
+                            torch.autocast(device_type="cuda", enabled=amp_enabled and device_name.startswith("cuda"))
+                            if device_name.startswith("cuda")
+                            else nullcontext()
+                        )
+                        with autocast_context:
+                            features = extract_transformers_image_features(model_by_device[device_name], model_inputs)
+                            features = torch.nn.functional.normalize(features, dim=-1)
+                        batch_outputs.append(features)
+                    should_profile = args.profile_steps > 0 and profiled_batches < args.profile_steps
+                    if should_profile and is_cuda:
+                        for device_name in devices:
+                            if device_name.startswith("cuda"):
+                                torch.cuda.synchronize(device=device_name)
+                    compute_end = time.perf_counter()
+
+                    cpu_copy_start = time.perf_counter()
+                    outputs.extend(
+                        [
+                            feature.to("cpu", non_blocking=is_cuda)
+                            if feature.device.type == "cuda"
+                            else feature
+                            for feature in batch_outputs
+                        ]
+                    )
+                    cpu_copy_end = time.perf_counter()
+                    kept_image_names.extend(packed_batch["image_names"])
+                    total_valid_images += len(packed_batch["image_names"])
+                    if should_profile:
+                        data_wait_total += data_wait
+                        compute_total += compute_end - compute_start
+                        cpu_copy_total += cpu_copy_end - cpu_copy_start
+                        profiled_batches += 1
+                progress.close()
+                elapsed = max(1e-6, time.perf_counter() - start_time)
+                print(f"Encoding throughput: {total_valid_images / elapsed:.2f} images/s")
+                if profiled_batches > 0:
+                    print(
+                        "Profile avg per batch "
+                        f"(first {profiled_batches}): "
+                        f"data_wait={data_wait_total / profiled_batches:.4f}s, "
+                        f"compute={compute_total / profiled_batches:.4f}s, "
+                        f"queue={cpu_copy_total / profiled_batches:.6f}s"
+                    )
+        finally:
+            shutdown_dataloader_workers(loader)
 
     if not outputs:
         raise RuntimeError("No valid images were encoded. Check --img-list and image file integrity.")
@@ -737,8 +827,7 @@ def main() -> None:
         for device_name in devices:
             if device_name.startswith("cuda"):
                 torch.cuda.synchronize(device=device_name)
-    output_chunks = [chunk.cpu() if chunk.device.type == "cuda" else chunk for chunk in outputs]
-    embeddings_tensor = torch.cat(output_chunks, dim=0)
+    embeddings_tensor = torch.cat(outputs, dim=0)
     embeddings = embeddings_tensor.numpy()
     if str(embeddings.dtype) != NUMPY_DTYPE_MAP[args.output_dtype]:
         embeddings = embeddings.astype(NUMPY_DTYPE_MAP[args.output_dtype], copy=False)
@@ -765,4 +854,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Interrupted by user. Cleanly shutting down DataLoader workers.")
+        raise SystemExit(130)

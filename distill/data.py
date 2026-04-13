@@ -55,6 +55,7 @@ class Track1DistillDataset(Dataset):
         preprocess,
         text_ids: torch.Tensor | None,
         text_embeddings: torch.Tensor | None,
+        texts: list[str] | None,
         teacher_text_ids: torch.Tensor | None,
         teacher_text_embeddings: torch.Tensor | None,
         teacher_image_names: list[str],
@@ -67,6 +68,11 @@ class Track1DistillDataset(Dataset):
         self.preprocess = preprocess
         self.text_embeddings = text_embeddings
         self.teacher_text_embeddings = teacher_text_embeddings
+        self.text_lookup = (
+            {int(text_id): str(text) for text_id, text in zip(text_ids.tolist(), texts)}
+            if text_ids is not None and texts is not None
+            else {}
+        )
         self.text_index = (
             {int(text_id): index for index, text_id in enumerate(text_ids.tolist())}
             if text_ids is not None and text_embeddings is not None
@@ -79,11 +85,11 @@ class Track1DistillDataset(Dataset):
         )
         self.text_supervision_enabled = text_embeddings is not None and len(self.text_index) > 0
         self.teacher_text_enabled = teacher_text_embeddings is not None and len(self.teacher_text_index) > 0
-        self.teacher_index: dict[str, torch.Tensor] = {}
+        self.teacher_embeddings = teacher_embeddings
+        self.teacher_index: dict[str, int] = {}
         for index, image_name in enumerate(teacher_image_names):
-            teacher_embedding = teacher_embeddings[index]
             for alias in build_image_name_aliases(image_name):
-                self.teacher_index.setdefault(alias, teacher_embedding)
+                self.teacher_index.setdefault(alias, index)
 
         self.hard_negative_lookup = hard_negative_lookup or {}
         self.num_hard_negatives = max(0, num_hard_negatives)
@@ -107,8 +113,8 @@ class Track1DistillDataset(Dataset):
             unit="image",
             dynamic_ncols=True,
         ):
-            teacher_embedding = self.teacher_index.get(row.image_name)
-            if teacher_embedding is None:
+            teacher_index = self.teacher_index.get(row.image_name)
+            if teacher_index is None:
                 self.missing_teacher_images.append(row.image_name)
                 self.skipped_missing_teacher_count += 1
                 if strict_teacher_coverage:
@@ -145,7 +151,7 @@ class Track1DistillDataset(Dataset):
                     "image_name": row.image_name,
                     "positive_indices": positive_indices,
                     "positive_text_ids": positive_ids,
-                    "teacher_embedding": teacher_embedding,
+                    "teacher_index": int(teacher_index),
                     "hard_negative_ids": hard_negative_ids,
                 }
             )
@@ -192,10 +198,16 @@ class Track1DistillDataset(Dataset):
                 negative_embeddings[neg_index] = self.text_embeddings[self.text_index[text_id]]
                 negative_mask[neg_index] = True
 
+        positive_text = ""
+        if sample["positive_text_ids"]:
+            selected_text_id = sample["positive_text_ids"][torch.randint(len(sample["positive_text_ids"]), (1,)).item()]
+            positive_text = self.text_lookup.get(int(selected_text_id), "")
+
         return {
             "pixel_values": pixel_values,
             "positive_embedding": positive_embedding,
-            "teacher_embedding": sample["teacher_embedding"],
+            "positive_text": positive_text,
+            "teacher_embedding": self.teacher_embeddings[int(sample["teacher_index"])],
             "teacher_positive_embedding": teacher_positive_embedding,
             "negative_embeddings": negative_embeddings,
             "negative_mask": negative_mask,

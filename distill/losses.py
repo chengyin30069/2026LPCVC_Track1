@@ -149,15 +149,22 @@ def compute_losses(
     gradient_distill_weight: float,
     augmented_feature_distill_weight: float,
     augmented_feature_noise_std: float,
+    projected_fd_weight: float = 0.0,
+    student_projected_embeddings: torch.Tensor | None = None,
+    student_projected_text_embeddings: torch.Tensor | None = None,
+    icl_loss_type: str = "kl",
+    clipkd_ckd_weight: float = 0.0,
+    clipkd_cross_kd_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     zero = torch.zeros((), device=student_embeddings.device)
     normalized_student = F.normalize(student_embeddings, dim=-1)
+    normalized_positive = F.normalize(positive_embeddings, dim=-1) if positive_embeddings is not None else None
 
     contrastive_loss = zero
     if contrastive_weight > 0:
-        if positive_embeddings is None:
+        if normalized_positive is None:
             raise ValueError("positive_embeddings are required when contrastive_weight > 0")
-        logits = normalized_student @ positive_embeddings.T / max(temperature, 1e-6)
+        logits = normalized_student @ normalized_positive.T / max(temperature, 1e-6)
         if contrastive_loss_type == "sigmoid":
             labels = torch.eye(logits.shape[0], device=student_embeddings.device, dtype=logits.dtype)
             contrastive_loss = F.binary_cross_entropy_with_logits(logits, labels)
@@ -235,13 +242,13 @@ def compute_losses(
     hard_negative_loss = zero
     if (
         hard_negative_weight > 0
-        and positive_embeddings is not None
+        and normalized_positive is not None
         and negative_embeddings is not None
         and negative_mask is not None
         and bool(negative_mask.any().item())
     ):
-        positive_scores = (student_embeddings * positive_embeddings).sum(dim=-1, keepdim=True)
-        negative_scores = torch.einsum("bd,bnd->bn", student_embeddings, negative_embeddings)
+        positive_scores = (normalized_student * normalized_positive).sum(dim=-1, keepdim=True)
+        negative_scores = torch.einsum("bd,bnd->bn", normalized_student, F.normalize(negative_embeddings, dim=-1))
         margin_loss = F.relu(hard_negative_margin - positive_scores + negative_scores)
         valid_mask = negative_mask.float()
         if hard_negative_weighting == "softmax":
@@ -352,30 +359,96 @@ def compute_losses(
     icl_loss = zero
     if (
         icl_weight > 0
-        and positive_embeddings is not None
+        and normalized_positive is not None
         and teacher_positive_embeddings is not None
         and normalized_student.shape[0] > 1
     ):
         normalized_teacher_text = F.normalize(teacher_positive_embeddings, dim=-1)
         if normalized_teacher_text.shape[-1] != normalized_teacher.shape[-1]:
             raise ValueError("Teacher text embedding dim must match teacher image embedding dim for ICL")
+        if icl_loss_type == "ce":
+            student_for_teacher = normalized_student
+            if student_for_teacher.shape[-1] != normalized_teacher.shape[-1]:
+                if student_projected_embeddings is None:
+                    raise ValueError("student_projected_embeddings are required for CE ICL with mismatched dims")
+                student_for_teacher = F.normalize(student_projected_embeddings, dim=-1)
 
-        student_i2t_logits = (normalized_student @ positive_embeddings.T) / max(temperature, 1e-6)
+            student_text_for_teacher = normalized_positive
+            if student_text_for_teacher.shape[-1] != normalized_teacher.shape[-1]:
+                if student_projected_text_embeddings is None:
+                    raise ValueError("student_projected_text_embeddings are required for CE ICL with mismatched dims")
+                student_text_for_teacher = F.normalize(student_projected_text_embeddings, dim=-1)
+
+            labels = torch.arange(normalized_student.shape[0], device=student_embeddings.device, dtype=torch.long)
+            student_i2t_logits = (student_for_teacher @ normalized_teacher_text.T) / max(temperature, 1e-6)
+            student_t2i_logits = (student_text_for_teacher @ normalized_teacher.T) / max(temperature, 1e-6)
+            icl_loss = 0.5 * (
+                F.cross_entropy(student_i2t_logits, labels) + F.cross_entropy(student_t2i_logits, labels)
+            )
+        else:
+            student_i2t_logits = (normalized_student @ normalized_positive.T) / max(temperature, 1e-6)
+            teacher_i2t_logits = (normalized_teacher @ normalized_teacher_text.T) / max(icl_teacher_temperature, 1e-6)
+            student_t2i_logits = (normalized_positive @ normalized_student.T) / max(temperature, 1e-6)
+            teacher_t2i_logits = (normalized_teacher_text @ normalized_teacher.T) / max(icl_teacher_temperature, 1e-6)
+
+            icl_i2t = F.kl_div(
+                F.log_softmax(student_i2t_logits, dim=-1),
+                F.softmax(teacher_i2t_logits, dim=-1),
+                reduction="batchmean",
+            )
+            icl_t2i = F.kl_div(
+                F.log_softmax(student_t2i_logits, dim=-1),
+                F.softmax(teacher_t2i_logits, dim=-1),
+                reduction="batchmean",
+            )
+            icl_loss = 0.5 * (icl_i2t + icl_t2i)
+
+    clipkd_ckd_loss = zero
+    clipkd_cross_kd_loss = zero
+    if (
+        (clipkd_ckd_weight > 0 or clipkd_cross_kd_weight > 0)
+        and normalized_positive is not None
+        and teacher_positive_embeddings is not None
+        and normalized_student.shape[0] > 1
+    ):
+        normalized_teacher_text = F.normalize(teacher_positive_embeddings, dim=-1)
+        if normalized_teacher_text.shape[-1] != normalized_teacher.shape[-1]:
+            raise ValueError("Teacher text embedding dim must match teacher image embedding dim for CLIP-KD logits")
+
         teacher_i2t_logits = (normalized_teacher @ normalized_teacher_text.T) / max(icl_teacher_temperature, 1e-6)
-        student_t2i_logits = (positive_embeddings @ normalized_student.T) / max(temperature, 1e-6)
         teacher_t2i_logits = (normalized_teacher_text @ normalized_teacher.T) / max(icl_teacher_temperature, 1e-6)
+        teacher_i2t_probs = F.softmax(teacher_i2t_logits, dim=-1)
+        teacher_t2i_probs = F.softmax(teacher_t2i_logits, dim=-1)
 
-        icl_i2t = F.kl_div(
-            F.log_softmax(student_i2t_logits, dim=-1),
-            F.softmax(teacher_i2t_logits, dim=-1),
-            reduction="batchmean",
-        )
-        icl_t2i = F.kl_div(
-            F.log_softmax(student_t2i_logits, dim=-1),
-            F.softmax(teacher_t2i_logits, dim=-1),
-            reduction="batchmean",
-        )
-        icl_loss = 0.5 * (icl_i2t + icl_t2i)
+        if clipkd_ckd_weight > 0:
+            student_i2t_logits = (normalized_student @ normalized_positive.T) / max(temperature, 1e-6)
+            student_t2i_logits = (normalized_positive @ normalized_student.T) / max(temperature, 1e-6)
+            clipkd_ckd_loss = 0.5 * (
+                F.kl_div(F.log_softmax(student_i2t_logits, dim=-1), teacher_i2t_probs, reduction="batchmean")
+                + F.kl_div(F.log_softmax(student_t2i_logits, dim=-1), teacher_t2i_probs, reduction="batchmean")
+            )
+
+        if clipkd_cross_kd_weight > 0:
+            student_for_teacher = normalized_student
+            if student_for_teacher.shape[-1] != normalized_teacher.shape[-1]:
+                if student_projected_embeddings is None:
+                    raise ValueError("student_projected_embeddings are required for CLIP-KD cross-KD with mismatched dims")
+                student_for_teacher = F.normalize(student_projected_embeddings, dim=-1)
+
+            student_text_for_teacher = normalized_positive
+            if student_text_for_teacher.shape[-1] != normalized_teacher.shape[-1]:
+                if student_projected_text_embeddings is None:
+                    raise ValueError(
+                        "student_projected_text_embeddings are required for CLIP-KD cross-KD with mismatched dims"
+                    )
+                student_text_for_teacher = F.normalize(student_projected_text_embeddings, dim=-1)
+
+            student_cross_i2t = (student_for_teacher @ normalized_teacher_text.T) / max(temperature, 1e-6)
+            student_cross_t2i = (student_text_for_teacher @ normalized_teacher.T) / max(temperature, 1e-6)
+            clipkd_cross_kd_loss = 0.5 * (
+                F.kl_div(F.log_softmax(student_cross_i2t, dim=-1), teacher_i2t_probs, reduction="batchmean")
+                + F.kl_div(F.log_softmax(student_cross_t2i, dim=-1), teacher_t2i_probs, reduction="batchmean")
+            )
 
     memory_bank_distill_loss = zero
     if (
@@ -401,6 +474,24 @@ def compute_losses(
         reference_features = F.normalize(reference_backbone_features, dim=-1)
         backbone_feature_distill_loss = 1.0 - F.cosine_similarity(student_features, reference_features, dim=-1).mean()
 
+    projected_fd_loss = zero
+    if projected_fd_weight > 0:
+        projected_image = normalized_student
+        if projected_image.shape[-1] != normalized_teacher.shape[-1]:
+            if student_projected_embeddings is None:
+                raise ValueError("student_projected_embeddings are required for projected FD with mismatched dims")
+            projected_image = F.normalize(student_projected_embeddings, dim=-1)
+        projected_fd_loss = F.mse_loss(projected_image, normalized_teacher)
+
+        if normalized_positive is not None and teacher_positive_embeddings is not None:
+            normalized_teacher_text = F.normalize(teacher_positive_embeddings, dim=-1)
+            projected_text = normalized_positive
+            if projected_text.shape[-1] != normalized_teacher_text.shape[-1]:
+                if student_projected_text_embeddings is None:
+                    raise ValueError("student_projected_text_embeddings are required for text projected FD")
+                projected_text = F.normalize(student_projected_text_embeddings, dim=-1)
+            projected_fd_loss = projected_fd_loss + F.mse_loss(projected_text, normalized_teacher_text)
+
     total_loss = (
         contrastive_weight * contrastive_loss
         + distill_weight * distill_loss
@@ -416,6 +507,9 @@ def compute_losses(
         + masked_feature_distill_weight * masked_feature_distill_loss
         + gradient_distill_weight * gradient_distill_loss
         + augmented_feature_distill_weight * augmented_feature_distill_loss
+        + projected_fd_weight * projected_fd_loss
+        + clipkd_ckd_weight * clipkd_ckd_loss
+        + clipkd_cross_kd_weight * clipkd_cross_kd_loss
     )
 
     return total_loss, {
@@ -433,5 +527,8 @@ def compute_losses(
         "masked_feature_distill_loss": float(masked_feature_distill_loss.detach().cpu()),
         "gradient_distill_loss": float(gradient_distill_loss.detach().cpu()),
         "augmented_feature_distill_loss": float(augmented_feature_distill_loss.detach().cpu()),
+        "projected_fd_loss": float(projected_fd_loss.detach().cpu()),
+        "clipkd_ckd_loss": float(clipkd_ckd_loss.detach().cpu()),
+        "clipkd_cross_kd_loss": float(clipkd_cross_kd_loss.detach().cpu()),
         "total_loss": float(total_loss.detach().cpu()),
     }

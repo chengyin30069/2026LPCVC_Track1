@@ -19,3 +19,6 @@ teacher_image_embeddings_image_only.skipped.tsv
 .vscode
 teacher_image_embeddings_siglip2.npz
 text_embeddings_teacher_siglip2.npz
+Clip-KD
+dataset_cc3m
+dataset_clipkd

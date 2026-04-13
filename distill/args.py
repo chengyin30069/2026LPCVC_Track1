@@ -66,6 +66,198 @@ def apply_clipkd_preset(args: argparse.Namespace) -> None:
         args.warmup_steps = 1000
 
 
+def apply_bigG14_fd_icl_preset(args: argparse.Namespace) -> None:
+    """CLIP-KD recipe optimized for bigG-14 teacher with cross-dimension projected FD."""
+    args.learnable_temperature = True
+    args.weight_decay = 0.05
+
+    # Disable all legacy losses
+    args.distill_weight = 0.0
+    args.distill_final_weight = 0.0
+    args.teacher_cosine_weight = 0.0
+    args.teacher_cosine_final_weight = 0.0
+    args.hard_negative_weight = 0.0
+    args.hard_negative_final_weight = 0.0
+    args.memory_bank_distill_weight = 0.0
+    args.memory_bank_distill_final_weight = 0.0
+    # Disable memory-bank buffer updates when memory-bank distillation is off.
+    # This removes unnecessary per-step tensor concat/copy overhead.
+    args.memory_bank_size = 0
+    args.backbone_feature_distill_weight = 0.0
+    args.backbone_feature_distill_final_weight = 0.0
+    args.masked_feature_distill_weight = 0.0
+    args.masked_feature_distill_final_weight = 0.0
+    args.gradient_distill_weight = 0.0
+    args.gradient_distill_final_weight = 0.0
+    args.augmented_feature_distill_weight = 0.0
+    args.augmented_feature_distill_final_weight = 0.0
+    args.intermediate_distill_weight = 0.0
+    args.intermediate_distill_final_weight = 0.0
+    args.feature_distill_weight = 0.0
+    args.feature_distill_final_weight = 0.0
+    args.relation_distill_weight = 0.0
+    args.relation_distill_final_weight = 0.0
+    args.crd_weight = 0.0
+    args.crd_final_weight = 0.0
+
+    # Core CLIP-KD losses for bigG-14
+    args.projected_fd_weight = 3.0
+    args.projected_fd_final_weight = 3.0
+    args.icl_weight = 0.15
+    args.icl_final_weight = 0.08
+    args.contrastive_weight = 0.1
+    args.contrastive_final_weight = 0.1
+
+    # Small anchor floor to prevent drift
+    args.baseline_anchor_weight = 0.005
+    args.baseline_anchor_final_weight = 0.001
+
+    # Training scaling for 1.35M dataset (1,345,289 pairs)
+    args.epochs = 40
+    args.batch_size = 128
+    args.grad_accumulation = 8
+    args.lr = 5e-6
+    args.warmup_steps = 2000
+    args.unfreeze_last_n_blocks = 2
+    args.early_stop_patience = 6
+    args.save_epoch_checkpoints = True
+
+
+def apply_clipkd_upstream_bigg14_preset(args: argparse.Namespace) -> None:
+    """More faithful CLIP-KD setup adapted for bigG-14 teacher distillation."""
+    args.learnable_temperature = True
+    args.weight_decay = 0.1
+
+    # Disable unrelated auxiliary losses.
+    args.distill_weight = 0.0
+    args.distill_final_weight = 0.0
+    args.teacher_cosine_weight = 0.0
+    args.teacher_cosine_final_weight = 0.0
+    args.hard_negative_weight = 0.0
+    args.hard_negative_final_weight = 0.0
+    args.memory_bank_distill_weight = 0.0
+    args.memory_bank_distill_final_weight = 0.0
+    args.memory_bank_size = 0
+    args.backbone_feature_distill_weight = 0.0
+    args.backbone_feature_distill_final_weight = 0.0
+    args.masked_feature_distill_weight = 0.0
+    args.masked_feature_distill_final_weight = 0.0
+    args.gradient_distill_weight = 0.0
+    args.gradient_distill_final_weight = 0.0
+    args.augmented_feature_distill_weight = 0.0
+    args.augmented_feature_distill_final_weight = 0.0
+    args.intermediate_distill_weight = 0.0
+    args.intermediate_distill_final_weight = 0.0
+    args.feature_distill_weight = 0.0
+    args.feature_distill_final_weight = 0.0
+    args.relation_distill_weight = 0.0
+    args.relation_distill_final_weight = 0.0
+    args.crd_weight = 0.0
+    args.crd_final_weight = 0.0
+
+    # CLIP-KD-style core objectives.
+    args.contrastive_weight = 1.0
+    args.contrastive_final_weight = 1.0
+    args.projected_fd_weight = 2000.0
+    args.projected_fd_final_weight = 2000.0
+    args.icl_weight = 1.0
+    args.icl_final_weight = 1.0
+    args.icl_loss_type = "ce"
+    args.clipkd_ckd_weight = 1.0
+    args.clipkd_ckd_final_weight = 1.0
+    args.clipkd_cross_kd_weight = 0.0
+    args.clipkd_cross_kd_final_weight = 0.0
+
+    # Keep tiny anchor to limit catastrophic drift.
+    args.baseline_anchor_weight = 0.001
+    args.baseline_anchor_final_weight = 0.0
+
+    # Training setup tuned for single 3090Ti.
+    args.epochs = 24
+    args.batch_size = 96
+    args.grad_accumulation = 8
+    args.lr = 3e-6
+    args.warmup_steps = 1500
+    args.unfreeze_last_n_blocks = 2
+    args.unfreeze_text_last_n_blocks = 2
+    args.online_student_text = True
+    args.train_logit_scale = True
+    args.val_split = 0.02
+    args.val_recall_source = "all"
+    args.val_recall_max_texts = 120000
+    args.early_stop_patience = 4
+    args.save_epoch_checkpoints = True
+
+
+def apply_clipkd_upstream_h14_preset(args: argparse.Namespace) -> None:
+    """CLIP-KD-style setup for ViT-H-14 teacher on CC3M-scale data."""
+    args.learnable_temperature = True
+    args.weight_decay = 0.1
+    args.adam_beta1 = 0.9
+    args.adam_beta2 = 0.98
+    args.adam_eps = 1e-6
+
+    # Disable unrelated auxiliary losses.
+    args.distill_weight = 0.0
+    args.distill_final_weight = 0.0
+    args.teacher_cosine_weight = 0.0
+    args.teacher_cosine_final_weight = 0.0
+    args.hard_negative_weight = 0.0
+    args.hard_negative_final_weight = 0.0
+    args.memory_bank_distill_weight = 0.0
+    args.memory_bank_distill_final_weight = 0.0
+    args.memory_bank_size = 0
+    args.backbone_feature_distill_weight = 0.0
+    args.backbone_feature_distill_final_weight = 0.0
+    args.masked_feature_distill_weight = 0.0
+    args.masked_feature_distill_final_weight = 0.0
+    args.gradient_distill_weight = 0.0
+    args.gradient_distill_final_weight = 0.0
+    args.augmented_feature_distill_weight = 0.0
+    args.augmented_feature_distill_final_weight = 0.0
+    args.intermediate_distill_weight = 0.0
+    args.intermediate_distill_final_weight = 0.0
+    args.feature_distill_weight = 0.0
+    args.feature_distill_final_weight = 0.0
+    args.relation_distill_weight = 0.0
+    args.relation_distill_final_weight = 0.0
+    args.crd_weight = 0.0
+    args.crd_final_weight = 0.0
+
+    # CLIP-KD-style core objectives with late-epoch KD decay for better baseline retention.
+    args.contrastive_weight = 1.2
+    args.contrastive_final_weight = 1.4
+    args.projected_fd_weight = 800.0
+    args.projected_fd_final_weight = 300.0
+    args.icl_weight = 0.8
+    args.icl_final_weight = 0.4
+    args.icl_loss_type = "ce"
+    args.clipkd_ckd_weight = 0.8
+    args.clipkd_ckd_final_weight = 0.4
+    args.clipkd_cross_kd_weight = 0.0
+    args.clipkd_cross_kd_final_weight = 0.0
+
+    # Stronger anchor helps avoid drifting below the initial student baseline.
+    args.baseline_anchor_weight = 0.5
+    args.baseline_anchor_final_weight = 0.2
+
+    # Training setup tuned for single 3090Ti and no forced early-stop.
+    args.epochs = 24
+    args.batch_size = 1024
+    args.grad_accumulation = 8
+    args.lr = 2e-5
+    args.warmup_steps = 9000
+    args.unfreeze_last_n_blocks = 2
+    args.unfreeze_text_last_n_blocks = 0
+    args.online_student_text = False
+    args.train_logit_scale = False
+    args.val_split = 0.02
+    args.val_recall_source = "all"
+    args.val_recall_max_texts = 120000
+    args.early_stop_patience = 0
+    args.save_epoch_checkpoints = True
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a distilled student image model for Track1.")
     parser.add_argument("--img-list", default="dataset/img_list.csv")
@@ -93,11 +285,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="artifacts/student_distill_v6")
     parser.add_argument(
         "--clipkd-preset",
-        choices=["none", "fd-icl", "fd-icl-crd"],
+        choices=[
+            "none",
+            "fd-icl",
+            "fd-icl-crd",
+            "bigG14-fd-icl",
+            "clipkd-upstream-bigg14",
+            "clipkd-upstream-h14",
+        ],
         default="none",
         help=(
             "Apply CLIP-KD paper-aligned loss presets. "
-            "fd-icl uses Feature Distillation + ICL; fd-icl-crd additionally enables CRD."
+            "fd-icl uses Feature Distillation + ICL; fd-icl-crd additionally enables CRD; "
+            "bigG14-fd-icl uses projected FD for bigG-14 cross-dim distillation; "
+            "clipkd-upstream-bigg14 approximates upstream CLIP-KD objective weights; "
+            "clipkd-upstream-h14 is tuned for ViT-H-14 teacher on CC3M."
         ),
     )
     parser.add_argument("--resume-checkpoint", help="Optional checkpoint path to continue training from.")
@@ -111,6 +313,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-accumulation", type=int, default=4)
     parser.add_argument("--lr", type=float, default=3e-6)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--adam-beta1", type=float, default=0.9, help="AdamW beta1.")
+    parser.add_argument("--adam-beta2", type=float, default=0.999, help="AdamW beta2.")
+    parser.add_argument("--adam-eps", type=float, default=1e-8, help="AdamW epsilon.")
     parser.add_argument("--contrastive-weight", type=float, default=0.06)
     parser.add_argument(
         "--contrastive-final-weight",
@@ -231,6 +436,34 @@ def parse_args() -> argparse.Namespace:
         help="Teacher temperature used by interactive contrastive distillation.",
     )
     parser.add_argument(
+        "--icl-loss-type",
+        choices=["kl", "ce"],
+        default="kl",
+        help="ICL objective: KL-to-teacher logits (kl) or upstream CE-style cross interaction (ce).",
+    )
+    parser.add_argument(
+        "--clipkd-ckd-weight",
+        type=float,
+        default=0.0,
+        help="Upstream CLIP-KD CKD weight (KL between student and teacher logits).",
+    )
+    parser.add_argument(
+        "--clipkd-ckd-final-weight",
+        type=float,
+        help="Final CKD weight at last epoch; defaults to --clipkd-ckd-weight.",
+    )
+    parser.add_argument(
+        "--clipkd-cross-kd-weight",
+        type=float,
+        default=0.0,
+        help="Upstream CLIP-KD cross-KD weight (student-to-teacher cross logits KL).",
+    )
+    parser.add_argument(
+        "--clipkd-cross-kd-final-weight",
+        type=float,
+        help="Final cross-KD weight at last epoch; defaults to --clipkd-cross-kd-weight.",
+    )
+    parser.add_argument(
         "--memory-bank-size",
         type=int,
         default=12288,
@@ -327,6 +560,17 @@ def parse_args() -> argparse.Namespace:
         help="Gaussian noise std used by augmented feature distillation.",
     )
     parser.add_argument(
+        "--projected-fd-weight",
+        type=float,
+        default=0.0,
+        help="Projected feature distillation weight (student projected to teacher dim via linear layer).",
+    )
+    parser.add_argument(
+        "--projected-fd-final-weight",
+        type=float,
+        help="Final projected FD weight at last epoch; defaults to --projected-fd-weight.",
+    )
+    parser.add_argument(
         "--intermediate-distill-weight",
         type=float,
         default=0.0,
@@ -396,8 +640,25 @@ def parse_args() -> argparse.Namespace:
         help="Upper clamp for learned contrastive temperature.",
     )
     parser.add_argument("--unfreeze-last-n-blocks", type=int, default=1)
+    parser.add_argument("--unfreeze-text-last-n-blocks", type=int, default=0)
+    parser.add_argument("--unfreeze-text-tower", action="store_true")
+    parser.add_argument("--online-student-text", action="store_true")
+    parser.add_argument("--train-logit-scale", action="store_true")
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--prefetch-factor", type=int, default=4)
+    parser.add_argument(
+        "--pin-memory",
+        dest="pin_memory",
+        action="store_true",
+        help="Enable DataLoader pin_memory explicitly (default: auto-on for CUDA).",
+    )
+    parser.add_argument(
+        "--no-pin-memory",
+        dest="pin_memory",
+        action="store_false",
+        help="Disable DataLoader pin_memory explicitly.",
+    )
+    parser.set_defaults(pin_memory=None)
     parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument(
         "--grad-clip-norm",
@@ -488,7 +749,14 @@ def parse_args() -> argparse.Namespace:
         help="Device spec, e.g. cuda:1 or comma-separated cuda:0,cuda:1 for DataParallel.",
     )
     args = parser.parse_args()
-    apply_clipkd_preset(args)
+    if getattr(args, "clipkd_preset", "none") == "bigG14-fd-icl":
+        apply_bigG14_fd_icl_preset(args)
+    elif getattr(args, "clipkd_preset", "none") == "clipkd-upstream-bigg14":
+        apply_clipkd_upstream_bigg14_preset(args)
+    elif getattr(args, "clipkd_preset", "none") == "clipkd-upstream-h14":
+        apply_clipkd_upstream_h14_preset(args)
+    else:
+        apply_clipkd_preset(args)
     return args
 
 
@@ -497,6 +765,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--grad-accumulation must be >= 1")
     if args.batch_size < 1:
         raise ValueError("--batch-size must be >= 1")
+    if args.adam_beta1 <= 0 or args.adam_beta1 >= 1:
+        raise ValueError("--adam-beta1 must be in (0, 1)")
+    if args.adam_beta2 <= 0 or args.adam_beta2 >= 1:
+        raise ValueError("--adam-beta2 must be in (0, 1)")
+    if args.adam_eps <= 0:
+        raise ValueError("--adam-eps must be > 0")
 
     if (
         args.contrastive_weight <= 0
@@ -511,6 +785,8 @@ def validate_args(args: argparse.Namespace) -> None:
         and args.masked_feature_distill_weight <= 0
         and args.gradient_distill_weight <= 0
         and args.augmented_feature_distill_weight <= 0
+        and args.clipkd_ckd_weight <= 0
+        and args.clipkd_cross_kd_weight <= 0
     ):
         raise ValueError("At least one loss weight must be > 0.")
 
@@ -519,6 +795,13 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--teacher-text-embeddings is required when ICL distillation is enabled")
     if args.icl_teacher_temperature <= 0:
         raise ValueError("--icl-teacher-temperature must be > 0")
+
+    clipkd_ckd_final_weight = args.clipkd_ckd_weight if args.clipkd_ckd_final_weight is None else args.clipkd_ckd_final_weight
+    clipkd_cross_final_weight = (
+        args.clipkd_cross_kd_weight if args.clipkd_cross_kd_final_weight is None else args.clipkd_cross_kd_final_weight
+    )
+    if (args.clipkd_ckd_weight > 0 or clipkd_ckd_final_weight > 0 or args.clipkd_cross_kd_weight > 0 or clipkd_cross_final_weight > 0) and not args.teacher_text_embeddings:
+        raise ValueError("--teacher-text-embeddings is required when CLIP-KD logits losses are enabled")
 
     if args.val_split < 0 or args.val_split >= 1:
         raise ValueError("--val-split must be in [0, 1).")
@@ -556,3 +839,13 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--masked-feature-keep-ratio must be in (0, 1]")
     if args.augmented_feature_noise_std < 0:
         raise ValueError("--augmented-feature-noise-std must be >= 0")
+    if args.unfreeze_text_last_n_blocks < 0:
+        raise ValueError("--unfreeze-text-last-n-blocks must be >= 0")
+    if args.clipkd_ckd_weight < 0:
+        raise ValueError("--clipkd-ckd-weight must be >= 0")
+    if args.clipkd_cross_kd_weight < 0:
+        raise ValueError("--clipkd-cross-kd-weight must be >= 0")
+    if args.clipkd_ckd_final_weight is not None and args.clipkd_ckd_final_weight < 0:
+        raise ValueError("--clipkd-ckd-final-weight must be >= 0")
+    if args.clipkd_cross_kd_final_weight is not None and args.clipkd_cross_kd_final_weight < 0:
+        raise ValueError("--clipkd-cross-kd-final-weight must be >= 0")

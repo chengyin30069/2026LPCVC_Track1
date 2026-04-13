@@ -165,11 +165,35 @@ def run_training(args) -> None:
     intermediate_distill_final_weight = (
         args.intermediate_distill_weight if args.intermediate_distill_final_weight is None else args.intermediate_distill_final_weight
     )
+    projected_fd_final_weight = (
+        args.projected_fd_weight if args.projected_fd_final_weight is None else args.projected_fd_final_weight
+    )
+    clipkd_ckd_final_weight = (
+        args.clipkd_ckd_weight if args.clipkd_ckd_final_weight is None else args.clipkd_ckd_final_weight
+    )
+    clipkd_cross_kd_final_weight = (
+        args.clipkd_cross_kd_weight
+        if args.clipkd_cross_kd_final_weight is None
+        else args.clipkd_cross_kd_final_weight
+    )
 
     hard_negative_enabled = args.hard_negative_weight > 0 or hard_negative_final_weight > 0
-    text_supervision_enabled = args.contrastive_weight > 0 or contrastive_final_weight > 0 or hard_negative_enabled
+    text_supervision_enabled = (
+        args.contrastive_weight > 0
+        or contrastive_final_weight > 0
+        or hard_negative_enabled
+        or args.icl_weight > 0
+        or icl_final_weight > 0
+        or args.clipkd_ckd_weight > 0
+        or clipkd_ckd_final_weight > 0
+        or args.clipkd_cross_kd_weight > 0
+        or clipkd_cross_kd_final_weight > 0
+        or args.online_student_text
+    )
     if text_supervision_enabled and not args.text_embeddings:
         raise ValueError("Text supervision is enabled but --text-embeddings is missing.")
+    if args.online_student_text and not args.text_embeddings:
+        raise ValueError("--online-student-text requires --text-embeddings for text-id mapping")
     if hard_negative_enabled and not args.hard_negatives:
         raise ValueError("--hard-negatives is required when hard-negative loss is enabled")
     if hard_negative_enabled and args.num_hard_negatives < 1:
@@ -202,17 +226,34 @@ def run_training(args) -> None:
     hard_negative_lookup = build_hard_negative_lookup(args.hard_negatives)
 
     model, preprocess_train, _ = open_clip.create_model_and_transforms(args.student_model_id)
+    student_tokenizer = open_clip.get_tokenizer(args.student_model_id) if args.online_student_text else None
     model = model.to(args.device)
     reference_model = StudentImageModel(copy.deepcopy(model)).to(args.device).eval()
     for parameter in reference_model.parameters():
         parameter.requires_grad = False
     student_model = StudentImageModel(model).to(args.device)
 
+    # Initialize teacher projector for cross-dimension distillation (e.g. 512 -> 1280)
+    teacher_embed_dim = int(teacher_cache["embeddings"].shape[1])
+    if teacher_embed_dim != student_model.embedding_dim:
+        student_model.init_teacher_projector(teacher_embed_dim)
+        student_model.teacher_projector = student_model.teacher_projector.to(args.device)
+        print(
+            f"Initialized teacher projector: {student_model.embedding_dim} -> {teacher_embed_dim} "
+            f"(params: {sum(p.numel() for p in student_model.teacher_projector.parameters()):,})"
+        )
+
     if args.channels_last and args.device.startswith("cuda"):
         reference_model = reference_model.to(memory_format=torch.channels_last)
         student_model = student_model.to(memory_format=torch.channels_last)
 
-    trainable_modules = configure_trainable_student(student_model, unfreeze_last_n_blocks=args.unfreeze_last_n_blocks)
+    trainable_modules = configure_trainable_student(
+        student_model,
+        unfreeze_last_n_blocks=args.unfreeze_last_n_blocks,
+        unfreeze_text_last_n_blocks=args.unfreeze_text_last_n_blocks,
+        unfreeze_text_tower=args.unfreeze_text_tower,
+        train_logit_scale=args.train_logit_scale,
+    )
 
     if resume_payload is not None:
         load_result = student_model.load_state_dict(resume_payload["student_state_dict"], strict=False)
@@ -309,6 +350,7 @@ def run_training(args) -> None:
         preprocess=preprocess_train,
         text_ids=text_ids,
         text_embeddings=text_embeddings,
+        texts=text_cache["texts"] if text_cache is not None else None,
         teacher_text_ids=teacher_text_ids,
         teacher_text_embeddings=teacher_text_embeddings,
         teacher_image_names=list(teacher_cache["image_names"]),
@@ -339,12 +381,14 @@ def run_training(args) -> None:
 
     train_dataset, val_dataset = build_train_val_subsets(dataset, val_split=args.val_split, seed=args.seed)
 
+    pin_memory = args.pin_memory if args.pin_memory is not None else args.device.startswith("cuda")
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=args.device.startswith("cuda"),
+        pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
         prefetch_factor=args.prefetch_factor if num_workers > 0 else None,
     )
@@ -356,7 +400,7 @@ def run_training(args) -> None:
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=num_workers,
-            pin_memory=args.device.startswith("cuda"),
+            pin_memory=pin_memory,
             persistent_workers=num_workers > 0,
             prefetch_factor=args.prefetch_factor if num_workers > 0 else None,
         )
@@ -372,7 +416,13 @@ def run_training(args) -> None:
     if args.learnable_temperature:
         optimizer_parameters.append(contrastive_log_temperature)
 
-    optimizer = torch.optim.AdamW(optimizer_parameters, lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(
+        optimizer_parameters,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        betas=(args.adam_beta1, args.adam_beta2),
+        eps=args.adam_eps,
+    )
 
     scheduler = None
     if args.lr_scheduler == "cosine":
@@ -408,6 +458,17 @@ def run_training(args) -> None:
         best_total_loss = min(best_total_loss, float(resume_payload["best_total_loss"]))
 
     can_compute_val_recall = val_loader is not None and text_embeddings is not None and text_supervision_enabled
+    if can_compute_val_recall and args.val_recall_source != "all":
+        has_val_recall_source_samples = any(
+            matches_source_filter(str(sample.get("image_name", "")), args.val_recall_source)
+            for sample in dataset.samples
+        )
+        if not has_val_recall_source_samples:
+            print(
+                "Validation Recall@10 disabled: "
+                f"no samples match --val-recall-source={args.val_recall_source!r}."
+            )
+            can_compute_val_recall = False
 
     effective_best_checkpoint_metric = args.best_checkpoint_metric
     if effective_best_checkpoint_metric == "val-recall@10" and not can_compute_val_recall:
@@ -538,6 +599,24 @@ def run_training(args) -> None:
             step=epoch,
             total_steps=max(1, args.epochs),
         )
+        current_projected_fd_weight = interpolate_weight(
+            start=args.projected_fd_weight,
+            end=projected_fd_final_weight,
+            step=epoch,
+            total_steps=max(1, args.epochs),
+        )
+        current_clipkd_ckd_weight = interpolate_weight(
+            start=args.clipkd_ckd_weight,
+            end=clipkd_ckd_final_weight,
+            step=epoch,
+            total_steps=max(1, args.epochs),
+        )
+        current_clipkd_cross_kd_weight = interpolate_weight(
+            start=args.clipkd_cross_kd_weight,
+            end=clipkd_cross_kd_final_weight,
+            step=epoch,
+            total_steps=max(1, args.epochs),
+        )
 
         optimizer.zero_grad(set_to_none=True)
         running = {
@@ -555,6 +634,9 @@ def run_training(args) -> None:
             "masked_feature_distill_loss": 0.0,
             "gradient_distill_loss": 0.0,
             "augmented_feature_distill_loss": 0.0,
+            "projected_fd_loss": 0.0,
+            "clipkd_ckd_loss": 0.0,
+            "clipkd_cross_kd_loss": 0.0,
             "intermediate_distill_loss": 0.0,
             "total_loss": 0.0,
         }
@@ -569,7 +651,15 @@ def run_training(args) -> None:
 
             positive_embeddings = None
             if text_supervision_enabled:
-                positive_embeddings = F.normalize(batch["positive_embedding"].to(args.device, non_blocking=True), dim=-1)
+                if args.online_student_text:
+                    if student_tokenizer is None:
+                        raise ValueError("student tokenizer is required when --online-student-text is enabled")
+                    token_batch = student_tokenizer(batch["positive_text"])
+                    if hasattr(token_batch, "to"):
+                        token_batch = token_batch.to(args.device)
+                    positive_embeddings = None  # assigned after student forward under autocast
+                else:
+                    positive_embeddings = F.normalize(batch["positive_embedding"].to(args.device, non_blocking=True), dim=-1)
 
             teacher_targets = batch["teacher_embedding"].to(args.device, non_blocking=True)
             teacher_positive_embeddings = None
@@ -614,6 +704,23 @@ def run_training(args) -> None:
                 else:
                     student_backbone_features = student_model.encode_backbone(pixel_values)
                 student_embeddings = student_model.projection_head(student_backbone_features)
+                if args.online_student_text:
+                    positive_embeddings = F.normalize(student_model.clip_model.encode_text(token_batch), dim=-1)
+
+                # Project student embeddings to teacher space for projected FD loss
+                student_projected = None
+                if current_projected_fd_weight > 0:
+                    student_projected = student_model.project_to_teacher(student_embeddings)
+                student_projected_text = None
+                if (
+                    positive_embeddings is not None
+                    and (
+                        current_projected_fd_weight > 0
+                        or current_clipkd_cross_kd_weight > 0
+                        or current_icl_weight > 0
+                    )
+                ):
+                    student_projected_text = student_model.project_to_teacher(positive_embeddings)
 
                 current_temperature = contrastive_log_temperature.exp().clamp(min=args.min_temperature, max=args.max_temperature)
                 loss, metrics = compute_losses(
@@ -656,6 +763,12 @@ def run_training(args) -> None:
                     gradient_distill_weight=current_gradient_distill_weight,
                     augmented_feature_distill_weight=current_augmented_feature_distill_weight,
                     augmented_feature_noise_std=args.augmented_feature_noise_std,
+                    projected_fd_weight=current_projected_fd_weight,
+                    student_projected_embeddings=student_projected,
+                    student_projected_text_embeddings=student_projected_text,
+                    icl_loss_type=args.icl_loss_type,
+                    clipkd_ckd_weight=current_clipkd_ckd_weight,
+                    clipkd_cross_kd_weight=current_clipkd_cross_kd_weight,
                 )
 
                 intermediate_distill_loss = torch.zeros((), device=args.device)
@@ -699,13 +812,11 @@ def run_training(args) -> None:
             progress.set_postfix(
                 {
                     "loss": f"{metrics['total_loss']:.4f}",
-                    "dist": f"{metrics['distill_loss']:.4f}",
+                    "pfd": f"{metrics.get('projected_fd_loss', 0.0):.4f}",
                     "ctr": f"{metrics['contrastive_loss']:.4f}",
-                    "hneg": f"{metrics['hard_negative_loss']:.4f}",
-                    "rel": f"{metrics['relation_distill_loss']:.4f}",
-                    "crd": f"{metrics['crd_loss']:.4f}",
                     "icl": f"{metrics['icl_loss']:.4f}",
-                    "mb": f"{metrics['memory_bank_distill_loss']:.4f}",
+                    "ckd": f"{metrics.get('clipkd_ckd_loss', 0.0):.4f}",
+                    "dist": f"{metrics['distill_loss']:.4f}",
                     "temp": f"{float(current_temperature.detach()):.4f}",
                     "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
                 }
@@ -732,6 +843,9 @@ def run_training(args) -> None:
         epoch_metrics["gradient_distill_weight"] = float(current_gradient_distill_weight)
         epoch_metrics["augmented_feature_distill_weight"] = float(current_augmented_feature_distill_weight)
         epoch_metrics["intermediate_distill_weight"] = float(current_intermediate_distill_weight)
+        epoch_metrics["projected_fd_weight"] = float(current_projected_fd_weight)
+        epoch_metrics["clipkd_ckd_weight"] = float(current_clipkd_ckd_weight)
+        epoch_metrics["clipkd_cross_kd_weight"] = float(current_clipkd_cross_kd_weight)
         epoch_metrics["contrastive_temperature"] = float(
             contrastive_log_temperature.exp().clamp(min=args.min_temperature, max=args.max_temperature).detach().cpu()
         )
@@ -753,7 +867,14 @@ def run_training(args) -> None:
 
                     positive_embeddings = None
                     if text_supervision_enabled:
-                        positive_embeddings = F.normalize(val_batch["positive_embedding"].to(args.device, non_blocking=True), dim=-1)
+                        if args.online_student_text:
+                            if student_tokenizer is None:
+                                raise ValueError("student tokenizer is required when --online-student-text is enabled")
+                            val_token_batch = student_tokenizer(val_batch["positive_text"])
+                            if hasattr(val_token_batch, "to"):
+                                val_token_batch = val_token_batch.to(args.device)
+                        else:
+                            positive_embeddings = F.normalize(val_batch["positive_embedding"].to(args.device, non_blocking=True), dim=-1)
 
                     teacher_targets = val_batch["teacher_embedding"].to(args.device, non_blocking=True)
                     teacher_positive_embeddings = None
@@ -796,6 +917,23 @@ def run_training(args) -> None:
                         else:
                             student_backbone_features = student_model.encode_backbone(pixel_values)
                         student_embeddings = student_model.projection_head(student_backbone_features)
+                        if args.online_student_text:
+                            positive_embeddings = F.normalize(student_model.clip_model.encode_text(val_token_batch), dim=-1)
+
+                        # Project student embeddings for val projected FD
+                        val_student_projected = None
+                        if current_projected_fd_weight > 0:
+                            val_student_projected = student_model.project_to_teacher(student_embeddings)
+                        val_student_projected_text = None
+                        if (
+                            positive_embeddings is not None
+                            and (
+                                current_projected_fd_weight > 0
+                                or current_clipkd_cross_kd_weight > 0
+                                or current_icl_weight > 0
+                            )
+                        ):
+                            val_student_projected_text = student_model.project_to_teacher(positive_embeddings)
 
                         val_loss, val_metrics = compute_losses(
                             student_embeddings=student_embeddings,
@@ -839,6 +977,12 @@ def run_training(args) -> None:
                             gradient_distill_weight=current_gradient_distill_weight,
                             augmented_feature_distill_weight=current_augmented_feature_distill_weight,
                             augmented_feature_noise_std=args.augmented_feature_noise_std,
+                            projected_fd_weight=current_projected_fd_weight,
+                            student_projected_embeddings=val_student_projected,
+                            student_projected_text_embeddings=val_student_projected_text,
+                            icl_loss_type=args.icl_loss_type,
+                            clipkd_ckd_weight=current_clipkd_ckd_weight,
+                            clipkd_cross_kd_weight=current_clipkd_cross_kd_weight,
                         )
                         intermediate_distill_loss = torch.zeros((), device=args.device)
                         if apply_intermediate_distill_val:
