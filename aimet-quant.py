@@ -11,9 +11,9 @@ from tqdm import tqdm
 IMAGE_DATASET_DIR = "/home/yyh603/lpcv/coco2017/train2017"
 TEST_IMAGES_DIR = "/home/yyh603/lpcv/dataset/images"
 
-MODEL_PATH = 'exported_onnx/mobile_vit.onnx'
+MODEL_PATH = 'exported_onnx/image_encoder.onnx'
 
-def process_image(image_path, target_size=(256, 256)):
+def process_image(image_path, target_size=(224, 224)):
     """Loads and processes an image to the required input shape (C, H, W)."""
     image = Image.open(image_path).convert('RGB').resize(target_size)
     image_array = np.array(image, dtype=np.float32) / 255.0  # Normalize
@@ -40,19 +40,19 @@ sim = QuantizationSimModel(model,
 device = torch.device("cpu")
 
 # Load calibration dataset
-calibration_images = load_calibration_images(IMAGE_DATASET_DIR, max_samples=500)  # Use first 500 images for calibration
+calibration_images = load_calibration_images(IMAGE_DATASET_DIR, max_samples=1)  # Use first 100 images for calibration
 
 # Load calibration dataset as an iterable
 def calibration_data_generator():
     for image in calibration_images:
-        # yield {"image": image}
-        yield {"image_tensor": image}
+        yield {"image": image}
+        # yield {"image_tensor": image}
 
 calibration_dataset = calibration_data_generator()
 
 # Create calibration data list
-# calibration_data = [{"image": img} for img in calibration_images]
-calibration_data = [{"image_tensor": img} for img in calibration_images]
+calibration_data = [{"image": img} for img in calibration_images]
+# calibration_data = [{"image_tensor": img} for img in calibration_images]
 
 # apply_seq_mse(sim, calibration_data)
 
@@ -75,7 +75,7 @@ def compute_cosine_similarity(original_output, quantized_output):
     return cosine_similarity(orig_flat, quant_flat)[0][0]
 
 # Load test images (different from calibration images)
-test_images = load_calibration_images(TEST_IMAGES_DIR, max_samples=100)  # Use 100 test images
+test_images = load_calibration_images(TEST_IMAGES_DIR, max_samples=2)  # Use 10 test images
 
 # Create ONNX Runtime sessions for both models
 original_session = ort.InferenceSession(MODEL_PATH)
@@ -89,10 +89,10 @@ print("=" * 50)
 
 for i, test_img in enumerate(test_images):
     # Run inference on both models
-    # original_output = original_session.run(None, {"image": test_img})[0]
-    # quantized_output = sim.session.run(None, {"image": test_img})[0]
-    original_output = original_session.run(None, {"image_tensor": test_img})[0]
-    quantized_output = qdq_session.run(None, {"image_tensor": test_img})[0]
+    original_output = original_session.run(None, {"image": test_img})[0]
+    quantized_output = sim.session.run(None, {"image": test_img})[0]
+    # original_output = original_session.run(None, {"image_tensor": test_img})[0]
+    # quantized_output = qdq_session.run(None, {"image_tensor": test_img})[0]
     
     # Compute metrics
     mse = compute_mse(original_output, quantized_output)
