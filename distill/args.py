@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 import torch
 
@@ -225,11 +226,11 @@ def apply_clipkd_upstream_h14_preset(args: argparse.Namespace) -> None:
     args.crd_final_weight = 0.0
 
     # CLIP-KD-style core objectives with late-epoch KD decay for better baseline retention.
-    args.contrastive_weight = 1.2
-    args.contrastive_final_weight = 1.4
-    args.projected_fd_weight = 800.0
-    args.projected_fd_final_weight = 300.0
-    args.icl_weight = 0.8
+    args.contrastive_weight = 0.9
+    args.contrastive_final_weight = 0.9
+    args.projected_fd_weight = 300.0
+    args.projected_fd_final_weight = 120.0
+    args.icl_weight = 0.5
     args.icl_final_weight = 0.4
     args.icl_loss_type = "ce"
     args.clipkd_ckd_weight = 0.8
@@ -238,17 +239,17 @@ def apply_clipkd_upstream_h14_preset(args: argparse.Namespace) -> None:
     args.clipkd_cross_kd_final_weight = 0.0
 
     # Stronger anchor helps avoid drifting below the initial student baseline.
-    args.baseline_anchor_weight = 0.5
-    args.baseline_anchor_final_weight = 0.2
+    args.baseline_anchor_weight = 60.0
+    args.baseline_anchor_final_weight = 55.0
 
     # Training setup tuned for single 3090Ti and no forced early-stop.
-    args.epochs = 24
+    args.epochs = 25
     args.batch_size = 1024
-    args.grad_accumulation = 8
-    args.lr = 2e-5
+    args.grad_accumulation = 2
+    args.lr = 1.5e-5
     args.warmup_steps = 9000
     args.unfreeze_last_n_blocks = 2
-    args.unfreeze_text_last_n_blocks = 0
+    args.unfreeze_text_last_n_blocks = 1
     args.online_student_text = False
     args.train_logit_scale = False
     args.val_split = 0.02
@@ -642,6 +643,45 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--unfreeze-last-n-blocks", type=int, default=1)
     parser.add_argument("--unfreeze-text-last-n-blocks", type=int, default=0)
     parser.add_argument("--unfreeze-text-tower", action="store_true")
+    parser.add_argument(
+        "--progressive-unfreeze",
+        action="store_true",
+        help="Gradually unfreeze more student blocks as epochs progress.",
+    )
+    parser.add_argument(
+        "--progressive-unfreeze-start-epoch",
+        type=int,
+        default=5,
+        help="Epoch index (1-based in current run) to start progressive unfreezing.",
+    )
+    parser.add_argument(
+        "--progressive-unfreeze-end-epoch",
+        type=int,
+        default=7,
+        help="Epoch index (1-based in current run) to finish progressive unfreezing (0 means last epoch).",
+    )
+    parser.add_argument(
+        "--max-unfreeze-last-n-blocks",
+        type=int,
+        default=0,
+        help="Target number of vision blocks to unfreeze by the end (0 means all available blocks).",
+    )
+    parser.add_argument(
+        "--progressive-unfreeze-text",
+        action="store_true",
+        help="Also progressively unfreeze text blocks.",
+    )
+    parser.add_argument(
+        "--max-unfreeze-text-last-n-blocks",
+        type=int,
+        default=0,
+        help="Target number of text blocks to unfreeze by the end (0 means all available blocks).",
+    )
+    parser.add_argument(
+        "--metrics-csv-name",
+        default="history.csv",
+        help="CSV file name (under output dir) for live per-epoch metrics.",
+    )
     parser.add_argument("--online-student-text", action="store_true")
     parser.add_argument("--train-logit-scale", action="store_true")
     parser.add_argument("--num-workers", type=int, default=None)
@@ -660,6 +700,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.set_defaults(pin_memory=None)
     parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument(
+        "--ddp",
+        action="store_true",
+        help="Enable DistributedDataParallel training (launch with torchrun).",
+    )
+    parser.add_argument(
+        "--ddp-backend",
+        choices=["nccl", "gloo"],
+        default="nccl",
+        help="DDP backend.",
+    )
+    parser.add_argument(
+        "--ddp-find-unused-parameters",
+        action="store_true",
+        help="Enable find_unused_parameters in DDP.",
+    )
+    parser.add_argument("--local-rank", type=int, default=int(os.environ.get("LOCAL_RANK", "0")))
+    parser.add_argument("--local_rank", dest="local_rank", type=int, help=argparse.SUPPRESS)
     parser.add_argument(
         "--grad-clip-norm",
         type=float,
@@ -733,7 +791,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--channels-last", action="store_true")
     parser.add_argument("--no-tf32", action="store_true")
     parser.add_argument("--save-epoch-checkpoints", action="store_true")
-    parser.add_argument("--seed", type=int, default=1919810)
+    parser.add_argument("--seed", type=int, default=6969)
     parser.add_argument(
         "--strict-teacher-coverage",
         action="store_true",
@@ -745,7 +803,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--device",
-        default="cuda:1" if torch.cuda.is_available() else "cpu",
+        default="cuda:0" if torch.cuda.is_available() else "cpu",
         help="Device spec, e.g. cuda:1 or comma-separated cuda:0,cuda:1 for DataParallel.",
     )
     args = parser.parse_args()
@@ -771,6 +829,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--adam-beta2 must be in (0, 1)")
     if args.adam_eps <= 0:
         raise ValueError("--adam-eps must be > 0")
+    if args.progressive_unfreeze_start_epoch < 1:
+        raise ValueError("--progressive-unfreeze-start-epoch must be >= 1")
+    if args.progressive_unfreeze_end_epoch < 0:
+        raise ValueError("--progressive-unfreeze-end-epoch must be >= 0")
+    if args.max_unfreeze_last_n_blocks < 0:
+        raise ValueError("--max-unfreeze-last-n-blocks must be >= 0")
+    if args.max_unfreeze_text_last_n_blocks < 0:
+        raise ValueError("--max-unfreeze-text-last-n-blocks must be >= 0")
 
     if (
         args.contrastive_weight <= 0

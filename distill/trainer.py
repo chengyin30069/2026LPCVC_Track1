@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import copy
+import csv
 import json
 import math
+import os
 from contextlib import nullcontext
 from pathlib import Path
 
 import open_clip
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
 from utils.student_model import (
@@ -48,6 +53,105 @@ class EncodeImageForward(nn.Module):
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         return self.clip_model.encode_image(pixel_values)
+
+
+LOSS_DISPLAY_SPECS: list[tuple[str, str, str]] = [
+    ("contrastive_weight", "contrastive_loss", "ctr"),
+    ("distill_weight", "distill_loss", "dist"),
+    ("teacher_cosine_weight", "teacher_cosine_loss", "tcos"),
+    ("baseline_anchor_weight", "baseline_anchor_loss", "anch"),
+    ("hard_negative_weight", "hard_negative_loss", "hn"),
+    ("relation_distill_weight", "relation_distill_loss", "rel"),
+    ("crd_weight", "crd_loss", "crd"),
+    ("icl_weight", "icl_loss", "icl"),
+    ("memory_bank_distill_weight", "memory_bank_distill_loss", "mb"),
+    ("backbone_feature_distill_weight", "backbone_feature_distill_loss", "bbfd"),
+    ("feature_distill_weight", "feature_distill_loss", "fd"),
+    ("masked_feature_distill_weight", "masked_feature_distill_loss", "mfd"),
+    ("gradient_distill_weight", "gradient_distill_loss", "gd"),
+    ("augmented_feature_distill_weight", "augmented_feature_distill_loss", "afd"),
+    ("intermediate_distill_weight", "intermediate_distill_loss", "int"),
+    ("projected_fd_weight", "projected_fd_loss", "pfd"),
+    ("clipkd_ckd_weight", "clipkd_ckd_loss", "ckd"),
+    ("clipkd_cross_kd_weight", "clipkd_cross_kd_loss", "xkd"),
+]
+
+
+def _is_dist_ready() -> bool:
+    return dist.is_available() and dist.is_initialized()
+
+
+def _get_text_blocks(clip_model: nn.Module) -> list[nn.Module]:
+    if hasattr(clip_model, "transformer") and hasattr(clip_model.transformer, "resblocks"):
+        return list(clip_model.transformer.resblocks)
+    text_module = getattr(clip_model, "text", None)
+    if text_module is not None and hasattr(text_module, "transformer") and hasattr(text_module.transformer, "resblocks"):
+        return list(text_module.transformer.resblocks)
+    return []
+
+
+def _sync_epoch_metric_sums(metric_sums: dict[str, float], batch_count: int, device: str) -> tuple[dict[str, float], int]:
+    if not _is_dist_ready():
+        return metric_sums, batch_count
+    keys = sorted(metric_sums.keys())
+    payload = torch.tensor(
+        [metric_sums[key] for key in keys] + [float(batch_count)],
+        device=device,
+        dtype=torch.float64,
+    )
+    dist.all_reduce(payload, op=dist.ReduceOp.SUM)
+    synced = {key: float(payload[index].item()) for index, key in enumerate(keys)}
+    synced_batches = int(payload[-1].item())
+    return synced, synced_batches
+
+
+def _active_loss_labels(weight_map: dict[str, float]) -> list[tuple[str, str]]:
+    labels: list[tuple[str, str]] = []
+    for weight_key, loss_key, short_label in LOSS_DISPLAY_SPECS:
+        if weight_map.get(weight_key, 0.0) > 0:
+            labels.append((loss_key, short_label))
+    return labels
+
+
+def _write_history_csv(history_path: Path, history: list[dict[str, float]]) -> None:
+    if not history:
+        return
+    fieldnames: list[str] = []
+    for row in history:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with history_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(history)
+
+
+def _progressive_target_blocks(
+    *,
+    base_blocks: int,
+    max_blocks: int,
+    current_run_epoch: int,
+    total_run_epochs: int,
+    start_epoch: int,
+    end_epoch: int,
+) -> int:
+    bounded_base = max(0, min(base_blocks, max_blocks))
+    bounded_max = max(0, min(max_blocks, max_blocks))
+    if bounded_max <= bounded_base:
+        return bounded_base
+
+    if end_epoch <= 0:
+        end_epoch = total_run_epochs
+    end_epoch = max(start_epoch, min(end_epoch, total_run_epochs))
+    current = max(1, min(current_run_epoch, total_run_epochs))
+    if current <= start_epoch:
+        return bounded_base
+    if current >= end_epoch:
+        return bounded_max
+
+    ratio = (current - start_epoch) / max(1, end_epoch - start_epoch)
+    return int(round(bounded_base + (bounded_max - bounded_base) * ratio))
 
 
 def parse_device_spec(device_spec: str) -> tuple[str, list[int]]:
@@ -130,6 +234,39 @@ def run_training(args) -> None:
 
     primary_device, device_ids = parse_device_spec(args.device)
     args.device = primary_device
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    ddp_enabled = bool(args.ddp or world_size > 1)
+    rank = 0
+    is_main_process = True
+    ddp_local_index = 0
+
+    if ddp_enabled:
+        if not args.device.startswith("cuda"):
+            raise ValueError("DDP mode requires CUDA devices")
+        local_rank_env = os.environ.get("LOCAL_RANK")
+        ddp_local_index = int(local_rank_env) if local_rank_env is not None else int(args.local_rank)
+        if not dist.is_initialized():
+            dist.init_process_group(backend=args.ddp_backend, init_method="env://")
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        is_main_process = rank == 0
+        selected_device_id = ddp_local_index
+        if device_ids:
+            if ddp_local_index >= len(device_ids):
+                if len(device_ids) == 1:
+                    selected_device_id = ddp_local_index
+                else:
+                    raise ValueError(
+                        f"LOCAL_RANK={ddp_local_index} is out of range for --device list ({len(device_ids)} GPUs)."
+                    )
+            else:
+                selected_device_id = device_ids[ddp_local_index]
+        torch.cuda.set_device(selected_device_id)
+        args.device = f"cuda:{selected_device_id}"
+    else:
+        world_size = 1
+        rank = 0
+        is_main_process = True
 
     contrastive_final_weight = args.contrastive_weight if args.contrastive_final_weight is None else args.contrastive_final_weight
     distill_final_weight = args.distill_weight if args.distill_final_weight is None else args.distill_final_weight
@@ -199,7 +336,7 @@ def run_training(args) -> None:
     if hard_negative_enabled and args.num_hard_negatives < 1:
         raise ValueError("--num-hard-negatives must be >= 1 when hard-negative loss is enabled")
 
-    set_seed(args.seed)
+    set_seed(args.seed + rank)
     configure_cuda_runtime(device=args.device, allow_tf32=not args.no_tf32)
     num_workers = resolve_num_workers(args.num_workers, args.device)
 
@@ -214,10 +351,11 @@ def run_training(args) -> None:
         checkpoint_model_id = resume_payload.get("student_model_id")
         if checkpoint_model_id:
             if checkpoint_model_id != args.student_model_id:
-                print(
-                    "Resume checkpoint model_id differs from --student-model-id; "
-                    f"using checkpoint model_id: {checkpoint_model_id}"
-                )
+                if is_main_process:
+                    print(
+                        "Resume checkpoint model_id differs from --student-model-id; "
+                        f"using checkpoint model_id: {checkpoint_model_id}"
+                    )
             args.student_model_id = checkpoint_model_id
 
     text_cache = load_text_embedding_cache(args.text_embeddings) if text_supervision_enabled else None
@@ -238,10 +376,11 @@ def run_training(args) -> None:
     if teacher_embed_dim != student_model.embedding_dim:
         student_model.init_teacher_projector(teacher_embed_dim)
         student_model.teacher_projector = student_model.teacher_projector.to(args.device)
-        print(
-            f"Initialized teacher projector: {student_model.embedding_dim} -> {teacher_embed_dim} "
-            f"(params: {sum(p.numel() for p in student_model.teacher_projector.parameters()):,})"
-        )
+        if is_main_process:
+            print(
+                f"Initialized teacher projector: {student_model.embedding_dim} -> {teacher_embed_dim} "
+                f"(params: {sum(p.numel() for p in student_model.teacher_projector.parameters()):,})"
+            )
 
     if args.channels_last and args.device.startswith("cuda"):
         reference_model = reference_model.to(memory_format=torch.channels_last)
@@ -258,44 +397,62 @@ def run_training(args) -> None:
     if resume_payload is not None:
         load_result = student_model.load_state_dict(resume_payload["student_state_dict"], strict=False)
         if load_result.missing_keys or load_result.unexpected_keys:
-            print(
-                "Resume checkpoint compatibility: "
-                f"missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}"
-            )
-        print(f"Resuming from checkpoint: {args.resume_checkpoint} (epoch={resume_epoch})")
+            if is_main_process:
+                print(
+                    "Resume checkpoint compatibility: "
+                    f"missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}"
+                )
+        if is_main_process:
+            print(f"Resuming from checkpoint: {args.resume_checkpoint} (epoch={resume_epoch})")
 
     if args.gradient_checkpointing and hasattr(student_model.clip_model, "set_grad_checkpointing"):
         student_model.clip_model.set_grad_checkpointing(True)
 
-    use_data_parallel = args.device.startswith("cuda") and len(device_ids) > 1
+    if ddp_enabled and args.online_student_text:
+        raise ValueError("DDP mode currently does not support --online-student-text")
+
+    student_model_core = student_model
+    student_model_runner: nn.Module = student_model
+    if ddp_enabled:
+        student_model_runner = DDP(
+            student_model_core,
+            device_ids=[torch.cuda.current_device()],
+            output_device=torch.cuda.current_device(),
+            find_unused_parameters=args.ddp_find_unused_parameters,
+        )
+
+    use_data_parallel = (not ddp_enabled) and args.device.startswith("cuda") and len(device_ids) > 1
     student_backbone_parallel = None
     reference_backbone_parallel = None
     teacher_intermediate_parallel = None
     if use_data_parallel:
-        student_backbone_parallel = nn.DataParallel(EncodeImageForward(student_model.clip_model), device_ids=device_ids)
+        student_backbone_parallel = nn.DataParallel(EncodeImageForward(student_model_core.clip_model), device_ids=device_ids)
         reference_backbone_parallel = nn.DataParallel(EncodeImageForward(reference_model.clip_model), device_ids=device_ids)
-        print(f"Enabled DataParallel backbone encoding on devices: {device_ids} (primary={args.device})")
+        if is_main_process:
+            print(f"Enabled DataParallel backbone encoding on devices: {device_ids} (primary={args.device})")
 
     intermediate_distill_enabled = args.intermediate_distill_weight > 0 or intermediate_distill_final_weight > 0
     teacher_intermediate_model = None
     student_block_recorder = None
     teacher_block_recorder = None
     if intermediate_distill_enabled and not is_openclip_compatible_model_id(args.intermediate_teacher_model_id):
-        print(
-            "Intermediate distillation disabled: "
-            f"model '{args.intermediate_teacher_model_id}' is not OpenCLIP-compatible. "
-            "Use an OpenCLIP model id or set intermediate distillation weight to 0."
-        )
+        if is_main_process:
+            print(
+                "Intermediate distillation disabled: "
+                f"model '{args.intermediate_teacher_model_id}' is not OpenCLIP-compatible. "
+                "Use an OpenCLIP model id or set intermediate distillation weight to 0."
+            )
         intermediate_distill_enabled = False
 
     if intermediate_distill_enabled:
         try:
             teacher_intermediate_model, _, _ = open_clip.create_model_and_transforms(args.intermediate_teacher_model_id)
         except Exception as exc:  # pragma: no cover - defensive runtime fallback
-            print(
-                "Intermediate distillation disabled: "
-                f"failed to load teacher model '{args.intermediate_teacher_model_id}' with OpenCLIP ({exc})."
-            )
+            if is_main_process:
+                print(
+                    "Intermediate distillation disabled: "
+                    f"failed to load teacher model '{args.intermediate_teacher_model_id}' with OpenCLIP ({exc})."
+                )
             intermediate_distill_enabled = False
 
     if intermediate_distill_enabled:
@@ -305,7 +462,7 @@ def run_training(args) -> None:
         if use_data_parallel:
             teacher_intermediate_parallel = nn.DataParallel(EncodeImageForward(teacher_intermediate_model), device_ids=device_ids)
 
-        student_blocks = get_vision_blocks(student_model.clip_model)
+        student_blocks = get_vision_blocks(student_model_core.clip_model)
         teacher_blocks = get_vision_blocks(teacher_intermediate_model)
         if not student_blocks or not teacher_blocks:
             raise ValueError("Unable to find vision blocks for intermediate distillation")
@@ -366,10 +523,11 @@ def run_training(args) -> None:
         dataset.samples = [
             sample for sample in dataset.samples if matches_source_filter(str(sample.get("image_name", "")), args.train_source)
         ]
-        print(
-            "Applied training source filter: "
-            f"source={args.train_source}, kept={len(dataset.samples)}/{original_sample_count}"
-        )
+        if is_main_process:
+            print(
+                "Applied training source filter: "
+                f"source={args.train_source}, kept={len(dataset.samples)}/{original_sample_count}"
+            )
 
     if len(dataset) == 0:
         raise ValueError("No valid training samples were constructed from the dataset.")
@@ -382,11 +540,28 @@ def run_training(args) -> None:
     train_dataset, val_dataset = build_train_val_subsets(dataset, val_split=args.val_split, seed=args.seed)
 
     pin_memory = args.pin_memory if args.pin_memory is not None else args.device.startswith("cuda")
+    train_sampler = None
+    val_sampler = None
+    if ddp_enabled:
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+        )
+        if val_dataset is not None:
+            val_sampler = DistributedSampler(
+                val_dataset,
+                num_replicas=world_size,
+                rank=rank,
+                shuffle=False,
+            )
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
@@ -399,6 +574,7 @@ def run_training(args) -> None:
             val_dataset,
             batch_size=args.batch_size,
             shuffle=False,
+            sampler=val_sampler,
             num_workers=num_workers,
             pin_memory=pin_memory,
             persistent_workers=num_workers > 0,
@@ -412,7 +588,7 @@ def run_training(args) -> None:
     if resume_payload is not None and "contrastive_log_temperature" in resume_payload:
         contrastive_log_temperature.data.copy_(resume_payload["contrastive_log_temperature"].to(args.device))
 
-    optimizer_parameters = list(get_trainable_parameters(student_model))
+    optimizer_parameters = list(student_model.parameters())
     if args.learnable_temperature:
         optimizer_parameters.append(contrastive_log_temperature)
 
@@ -458,16 +634,21 @@ def run_training(args) -> None:
         best_total_loss = min(best_total_loss, float(resume_payload["best_total_loss"]))
 
     can_compute_val_recall = val_loader is not None and text_embeddings is not None and text_supervision_enabled
+    if ddp_enabled and can_compute_val_recall:
+        if is_main_process:
+            print("Validation Recall@10 is disabled in DDP mode; use benchmark sweep checkpoints for accuracy tracking.")
+        can_compute_val_recall = False
     if can_compute_val_recall and args.val_recall_source != "all":
         has_val_recall_source_samples = any(
             matches_source_filter(str(sample.get("image_name", "")), args.val_recall_source)
             for sample in dataset.samples
         )
         if not has_val_recall_source_samples:
-            print(
-                "Validation Recall@10 disabled: "
-                f"no samples match --val-recall-source={args.val_recall_source!r}."
-            )
+            if is_main_process:
+                print(
+                    "Validation Recall@10 disabled: "
+                    f"no samples match --val-recall-source={args.val_recall_source!r}."
+                )
             can_compute_val_recall = False
 
     effective_best_checkpoint_metric = args.best_checkpoint_metric
@@ -496,19 +677,72 @@ def run_training(args) -> None:
     early_stop_patience = int(args.early_stop_patience)
     early_stop_wait = 0
 
-    print(f"Training samples: {len(train_dataset)}")
-    if val_dataset is not None:
-        print(f"Validation samples: {len(val_dataset)}")
-    print(f"Trainable modules: {', '.join(trainable_modules)}")
-    print(f"Trainable parameters: {count_trainable_parameters(student_model):,}")
+    if is_main_process:
+        print(f"Training samples: {len(train_dataset)}")
+        if val_dataset is not None:
+            print(f"Validation samples: {len(val_dataset)}")
+        print(f"Trainable modules: {', '.join(trainable_modules)}")
+        print(f"Trainable parameters: {count_trainable_parameters(student_model):,}")
 
     student_model.train()
+    student_model_runner.train()
     memory_bank_student = torch.empty((0, student_model.embedding_dim), device=args.device, dtype=torch.float32)
     memory_bank_teacher = torch.empty((0, teacher_embeddings.shape[1]), device=args.device, dtype=torch.float32)
+    student_vision_blocks = get_vision_blocks(student_model.clip_model)
+    student_text_blocks = _get_text_blocks(student_model.clip_model)
+    current_unfreeze_last_n_blocks = int(max(0, args.unfreeze_last_n_blocks))
+    current_unfreeze_text_last_n_blocks = int(max(0, args.unfreeze_text_last_n_blocks))
+    max_unfreeze_last_n_blocks = len(student_vision_blocks) if args.max_unfreeze_last_n_blocks <= 0 else args.max_unfreeze_last_n_blocks
+    max_unfreeze_last_n_blocks = max(0, min(max_unfreeze_last_n_blocks, len(student_vision_blocks)))
+    max_unfreeze_text_last_n_blocks = (
+        len(student_text_blocks) if args.max_unfreeze_text_last_n_blocks <= 0 else args.max_unfreeze_text_last_n_blocks
+    )
+    max_unfreeze_text_last_n_blocks = max(0, min(max_unfreeze_text_last_n_blocks, len(student_text_blocks)))
 
     total_target_epoch = resume_epoch + args.epochs
     for epoch in range(args.epochs):
         current_epoch = resume_epoch + epoch + 1
+        if train_sampler is not None:
+            train_sampler.set_epoch(current_epoch)
+
+        if args.progressive_unfreeze:
+            target_vision_blocks = _progressive_target_blocks(
+                base_blocks=int(max(0, args.unfreeze_last_n_blocks)),
+                max_blocks=max_unfreeze_last_n_blocks,
+                current_run_epoch=epoch + 1,
+                total_run_epochs=args.epochs,
+                start_epoch=args.progressive_unfreeze_start_epoch,
+                end_epoch=args.progressive_unfreeze_end_epoch,
+            )
+            if target_vision_blocks > current_unfreeze_last_n_blocks:
+                for block in student_vision_blocks[-target_vision_blocks:]:
+                    for parameter in block.parameters():
+                        parameter.requires_grad = True
+                current_unfreeze_last_n_blocks = target_vision_blocks
+                trainable_modules.append(f"vision_blocks[-{target_vision_blocks}:]")
+
+            if args.progressive_unfreeze_text:
+                target_text_blocks = _progressive_target_blocks(
+                    base_blocks=int(max(0, args.unfreeze_text_last_n_blocks)),
+                    max_blocks=max_unfreeze_text_last_n_blocks,
+                    current_run_epoch=epoch + 1,
+                    total_run_epochs=args.epochs,
+                    start_epoch=args.progressive_unfreeze_start_epoch,
+                    end_epoch=args.progressive_unfreeze_end_epoch,
+                )
+                if target_text_blocks > current_unfreeze_text_last_n_blocks:
+                    for block in student_text_blocks[-target_text_blocks:]:
+                        for parameter in block.parameters():
+                            parameter.requires_grad = True
+                    current_unfreeze_text_last_n_blocks = target_text_blocks
+                    trainable_modules.append(f"text_blocks[-{target_text_blocks}:]")
+
+            if is_main_process:
+                print(
+                    "Progressive unfreeze: "
+                    f"vision={current_unfreeze_last_n_blocks}, text={current_unfreeze_text_last_n_blocks}, "
+                    f"trainable_params={count_trainable_parameters(student_model):,}"
+                )
         current_anchor_weight = interpolate_weight(
             start=args.baseline_anchor_weight,
             end=args.baseline_anchor_final_weight,
@@ -617,6 +851,27 @@ def run_training(args) -> None:
             step=epoch,
             total_steps=max(1, args.epochs),
         )
+        active_weight_map = {
+            "contrastive_weight": float(current_contrastive_weight),
+            "distill_weight": float(current_distill_weight),
+            "teacher_cosine_weight": float(current_teacher_cosine_weight),
+            "baseline_anchor_weight": float(current_anchor_weight),
+            "hard_negative_weight": float(current_hard_negative_weight),
+            "relation_distill_weight": float(current_relation_distill_weight),
+            "crd_weight": float(current_crd_weight),
+            "icl_weight": float(current_icl_weight),
+            "memory_bank_distill_weight": float(current_memory_bank_distill_weight),
+            "backbone_feature_distill_weight": float(current_backbone_feature_distill_weight),
+            "feature_distill_weight": float(current_feature_distill_weight),
+            "masked_feature_distill_weight": float(current_masked_feature_distill_weight),
+            "gradient_distill_weight": float(current_gradient_distill_weight),
+            "augmented_feature_distill_weight": float(current_augmented_feature_distill_weight),
+            "intermediate_distill_weight": float(current_intermediate_distill_weight),
+            "projected_fd_weight": float(current_projected_fd_weight),
+            "clipkd_ckd_weight": float(current_clipkd_ckd_weight),
+            "clipkd_cross_kd_weight": float(current_clipkd_cross_kd_weight),
+        }
+        active_loss_labels = _active_loss_labels(active_weight_map)
 
         optimizer.zero_grad(set_to_none=True)
         running = {
@@ -642,9 +897,13 @@ def run_training(args) -> None:
         }
         optimizer_steps = 0
 
-        progress = tqdm(train_loader, total=len(train_loader), desc=f"Epoch {current_epoch}/{total_target_epoch}", dynamic_ncols=True)
+        train_iter = (
+            tqdm(train_loader, total=len(train_loader), desc=f"Epoch {current_epoch}/{total_target_epoch}", dynamic_ncols=True)
+            if is_main_process
+            else train_loader
+        )
 
-        for step, batch in enumerate(progress, start=1):
+        for step, batch in enumerate(train_iter, start=1):
             pixel_values = batch["pixel_values"].to(args.device, non_blocking=True)
             if args.channels_last and args.device.startswith("cuda"):
                 pixel_values = pixel_values.contiguous(memory_format=torch.channels_last)
@@ -699,11 +958,15 @@ def run_training(args) -> None:
                         reference_backbone_features = reference_model.encode_backbone(pixel_values)
                     reference_embeddings = reference_model.projection_head(reference_backbone_features)
 
-                if student_backbone_parallel is not None:
-                    student_backbone_features = student_backbone_parallel(pixel_values)
+                student_backbone_features = None
+                if current_backbone_feature_distill_weight > 0:
+                    if student_backbone_parallel is not None:
+                        student_backbone_features = student_backbone_parallel(pixel_values)
+                    else:
+                        student_backbone_features = student_model.encode_backbone(pixel_values)
+                    student_embeddings = student_model.projection_head(student_backbone_features)
                 else:
-                    student_backbone_features = student_model.encode_backbone(pixel_values)
-                student_embeddings = student_model.projection_head(student_backbone_features)
+                    student_embeddings = student_model_runner(pixel_values)
                 if args.online_student_text:
                     positive_embeddings = F.normalize(student_model.clip_model.encode_text(token_batch), dim=-1)
 
@@ -809,22 +1072,19 @@ def run_training(args) -> None:
             for key, value in metrics.items():
                 running[key] += value
 
-            progress.set_postfix(
-                {
-                    "loss": f"{metrics['total_loss']:.4f}",
-                    "pfd": f"{metrics.get('projected_fd_loss', 0.0):.4f}",
-                    "ctr": f"{metrics['contrastive_loss']:.4f}",
-                    "icl": f"{metrics['icl_loss']:.4f}",
-                    "ckd": f"{metrics.get('clipkd_ckd_loss', 0.0):.4f}",
-                    "dist": f"{metrics['distill_loss']:.4f}",
-                    "temp": f"{float(current_temperature.detach()):.4f}",
-                    "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
-                }
-            )
+            if is_main_process and hasattr(train_iter, "set_postfix"):
+                postfix = {"loss": f"{metrics['total_loss']:.4f}"}
+                for loss_key, label in active_loss_labels[:6]:
+                    postfix[label] = f"{metrics.get(loss_key, 0.0):.4f}"
+                postfix["temp"] = f"{float(current_temperature.detach()):.4f}"
+                postfix["lr"] = f"{optimizer.param_groups[0]['lr']:.2e}"
+                train_iter.set_postfix(postfix)
 
-        progress.close()
+        if is_main_process and hasattr(train_iter, "close"):
+            train_iter.close()
 
-        epoch_metrics = {key: value / len(train_loader) for key, value in running.items()}
+        synced_running, synced_train_batches = _sync_epoch_metric_sums(running, len(train_loader), args.device)
+        epoch_metrics = {key: value / max(1, synced_train_batches) for key, value in synced_running.items()}
         epoch_metrics["epoch"] = current_epoch
         epoch_metrics["optimizer_steps"] = optimizer_steps
         epoch_metrics["lr"] = float(optimizer.param_groups[0]["lr"])
@@ -855,12 +1115,20 @@ def run_training(args) -> None:
         )
         if should_run_validation:
             student_model.eval()
+            student_model_runner.eval()
             val_running = {key: 0.0 for key in running}
             val_recall_embeddings: list[torch.Tensor] = []
             val_recall_sample_indices: list[torch.Tensor] = []
+            val_batch_count = 0
 
+            val_iter = (
+                tqdm(val_loader, total=len(val_loader), desc=f"Val {current_epoch}/{total_target_epoch}", dynamic_ncols=True)
+                if is_main_process
+                else val_loader
+            )
             with torch.inference_mode():
-                for val_batch in val_loader:
+                for val_batch in val_iter:
+                    val_batch_count += 1
                     pixel_values = val_batch["pixel_values"].to(args.device, non_blocking=True)
                     if args.channels_last and args.device.startswith("cuda"):
                         pixel_values = pixel_values.contiguous(memory_format=torch.channels_last)
@@ -912,11 +1180,15 @@ def run_training(args) -> None:
                         else:
                             reference_backbone_features = reference_model.encode_backbone(pixel_values)
                         reference_embeddings = reference_model.projection_head(reference_backbone_features)
-                        if student_backbone_parallel is not None:
-                            student_backbone_features = student_backbone_parallel(pixel_values)
+                        student_backbone_features = None
+                        if current_backbone_feature_distill_weight > 0:
+                            if student_backbone_parallel is not None:
+                                student_backbone_features = student_backbone_parallel(pixel_values)
+                            else:
+                                student_backbone_features = student_model.encode_backbone(pixel_values)
+                            student_embeddings = student_model.projection_head(student_backbone_features)
                         else:
-                            student_backbone_features = student_model.encode_backbone(pixel_values)
-                        student_embeddings = student_model.projection_head(student_backbone_features)
+                            student_embeddings = student_model_runner(pixel_values)
                         if args.online_student_text:
                             positive_embeddings = F.normalize(student_model.clip_model.encode_text(val_token_batch), dim=-1)
 
@@ -1000,8 +1272,14 @@ def run_training(args) -> None:
 
                     for key, value in val_metrics.items():
                         val_running[key] += value
+                    if is_main_process and hasattr(val_iter, "set_postfix"):
+                        val_iter.set_postfix({"val_loss": f"{val_metrics.get('total_loss', 0.0):.4f}"})
 
-            val_metrics_avg = {f"val_{key}": value / len(val_loader) for key, value in val_running.items()}
+            if is_main_process and hasattr(val_iter, "close"):
+                val_iter.close()
+
+            synced_val_running, synced_val_batches = _sync_epoch_metric_sums(val_running, val_batch_count, args.device)
+            val_metrics_avg = {f"val_{key}": value / max(1, synced_val_batches) for key, value in synced_val_running.items()}
             epoch_metrics.update(val_metrics_avg)
 
             if can_compute_val_recall and val_recall_embeddings and val_recall_sample_indices:
@@ -1021,11 +1299,29 @@ def run_training(args) -> None:
                     epoch_metrics["val_recall_at_10"] = float(val_recall_at_10)
 
             student_model.train()
+            student_model_runner.train()
 
         history.append(epoch_metrics)
-        print(json.dumps(epoch_metrics, sort_keys=True))
+        if is_main_process:
+            loss_parts = [f"total={epoch_metrics['total_loss']:.4f}"]
+            for loss_key, label in active_loss_labels:
+                if loss_key in epoch_metrics:
+                    loss_parts.append(f"{label}={epoch_metrics[loss_key]:.4f}")
+            summary = (
+                f"Epoch {current_epoch}/{total_target_epoch} | "
+                + ", ".join(loss_parts)
+                + f", lr={epoch_metrics['lr']:.2e}"
+            )
+            if "val_total_loss" in epoch_metrics:
+                summary += f", val={epoch_metrics['val_total_loss']:.4f}"
+            if "val_recall_at_10" in epoch_metrics:
+                summary += f", val_r10={epoch_metrics['val_recall_at_10']:.4f}"
+            print(summary)
 
-        if args.save_epoch_checkpoints:
+            (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+            _write_history_csv(output_dir / args.metrics_csv_name, history)
+
+        if args.save_epoch_checkpoints and is_main_process:
             save_training_checkpoint(
                 output_dir / f"student_checkpoint_epoch_{current_epoch:02d}.pt",
                 student_model=student_model,
@@ -1060,59 +1356,68 @@ def run_training(args) -> None:
         if should_update_best:
             best_checkpoint_metric = float(checkpoint_metric_value)
             early_stop_wait = 0
-            save_training_checkpoint(
-                output_dir / "best_loss_checkpoint.pt",
-                student_model=student_model,
-                text_cache=text_cache,
-                teacher_cache=teacher_cache,
-                trainable_modules=trainable_modules,
-                args=args,
-                history=history,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
-                best_total_loss=best_total_loss,
-                best_metric_name=checkpoint_metric_name,
-                best_metric_value=best_checkpoint_metric,
-                epoch=current_epoch,
-                contrastive_log_temperature=contrastive_log_temperature,
-            )
+            if is_main_process:
+                save_training_checkpoint(
+                    output_dir / "best_loss_checkpoint.pt",
+                    student_model=student_model,
+                    text_cache=text_cache,
+                    teacher_cache=teacher_cache,
+                    trainable_modules=trainable_modules,
+                    args=args,
+                    history=history,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    best_total_loss=best_total_loss,
+                    best_metric_name=checkpoint_metric_name,
+                    best_metric_value=best_checkpoint_metric,
+                    epoch=current_epoch,
+                    contrastive_log_temperature=contrastive_log_temperature,
+                )
         elif checkpoint_metric_value is not None and not math.isnan(float(checkpoint_metric_value)):
             early_stop_wait += 1
 
         if early_stop_patience > 0 and early_stop_wait >= early_stop_patience:
-            print(
-                "Early stopping triggered: "
-                f"metric={checkpoint_metric_name}, patience={early_stop_patience}, "
-                f"best={best_checkpoint_metric:.6f}, last={float(checkpoint_metric_value):.6f}, "
-                f"epoch={current_epoch}"
-            )
+            if is_main_process:
+                print(
+                    "Early stopping triggered: "
+                    f"metric={checkpoint_metric_name}, patience={early_stop_patience}, "
+                    f"best={best_checkpoint_metric:.6f}, last={float(checkpoint_metric_value):.6f}, "
+                    f"epoch={current_epoch}"
+                )
             break
 
     final_epoch = int(history[-1]["epoch"]) if history else total_target_epoch
-    save_training_checkpoint(
-        output_dir / "student_checkpoint.pt",
-        student_model=student_model,
-        text_cache=text_cache,
-        teacher_cache=teacher_cache,
-        trainable_modules=trainable_modules,
-        args=args,
-        history=history,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        scaler=scaler,
-        best_total_loss=best_total_loss,
-        best_metric_name=checkpoint_metric_name,
-        best_metric_value=best_checkpoint_metric if not math.isinf(best_checkpoint_metric) else None,
-        epoch=final_epoch,
-        contrastive_log_temperature=contrastive_log_temperature,
-    )
-    (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    if is_main_process:
+        save_training_checkpoint(
+            output_dir / "student_checkpoint.pt",
+            student_model=student_model,
+            text_cache=text_cache,
+            teacher_cache=teacher_cache,
+            trainable_modules=trainable_modules,
+            args=args,
+            history=history,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            best_total_loss=best_total_loss,
+            best_metric_name=checkpoint_metric_name,
+            best_metric_value=best_checkpoint_metric if not math.isinf(best_checkpoint_metric) else None,
+            epoch=final_epoch,
+            contrastive_log_temperature=contrastive_log_temperature,
+        )
+        (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+        _write_history_csv(output_dir / args.metrics_csv_name, history)
 
     if student_block_recorder is not None:
         student_block_recorder.close()
     if teacher_block_recorder is not None:
         teacher_block_recorder.close()
 
-    print(f"Saved checkpoint to {output_dir / 'student_checkpoint.pt'}")
-    print(f"Saved best checkpoint to {output_dir / 'best_loss_checkpoint.pt'}")
+    if is_main_process:
+        print(f"Saved checkpoint to {output_dir / 'student_checkpoint.pt'}")
+        print(f"Saved best checkpoint to {output_dir / 'best_loss_checkpoint.pt'}")
+
+    if _is_dist_ready():
+        dist.barrier()
+        dist.destroy_process_group()
