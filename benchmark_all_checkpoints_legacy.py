@@ -3,16 +3,21 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 from pathlib import Path
 from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter, MaxNLocator
 import open_clip
 import torch
 
 from benchmark import StudentEvalWrapper, configure_cuda_runtime, evaluate_coco_recall_at10
 from utils.student_model import StudentImageModel
+
+STUDENT_BASELINE_R10 = 0.4374
+TEACHER_BASELINE_R10 = 0.4539
 
 
 def parse_args() -> argparse.Namespace:
@@ -124,6 +129,31 @@ def build_eval_args(args: argparse.Namespace) -> SimpleNamespace:
     )
 
 
+def _compute_accuracy_ylim(series: list[float | None], references: list[float]) -> tuple[float, float]:
+    values = []
+    for value in series:
+        if value is None:
+            continue
+        numeric = float(value)
+        if math.isnan(numeric):
+            continue
+        values.append(numeric)
+    values.extend(references)
+    if not values:
+        return 0.0, 1.0
+    lower = min(values)
+    upper = max(values)
+    span = max(upper - lower, 1e-4)
+    pad = max(0.004, span * 0.2)
+    y_min = max(0.0, lower - pad)
+    y_max = min(1.0, upper + pad)
+    if y_max - y_min < 0.01:
+        center = (y_min + y_max) * 0.5
+        y_min = max(0.0, center - 0.005)
+        y_max = min(1.0, center + 0.005)
+    return y_min, y_max
+
+
 def main() -> None:
     args = parse_args()
     ckpt_dir = Path(args.checkpoint_dir)
@@ -233,7 +263,51 @@ def main() -> None:
     val_recall_y = [float(y) for y in train_val_recalls if y is not None]
     if val_recall_x:
         ax_acc.plot(val_recall_x, val_recall_y, marker="d", linewidth=1.5, linestyle="--", label="Train Val Recall@10")
-    ax_acc.set_ylabel("Accuracy")
+
+    student_line_color = "#ff006e"
+    teacher_line_color = "#00c853"
+    ax_acc.axhline(
+        STUDENT_BASELINE_R10,
+        color=student_line_color,
+        linestyle=(0, (6, 3)),
+        linewidth=2.4,
+        label=f"Student init: {STUDENT_BASELINE_R10:.4f}",
+    )
+    ax_acc.axhline(
+        TEACHER_BASELINE_R10,
+        color=teacher_line_color,
+        linestyle=(0, (6, 3)),
+        linewidth=2.4,
+        label=f"Teacher: {TEACHER_BASELINE_R10:.4f}",
+    )
+
+    annotation_x = epochs[-1] if epochs else 0
+    ax_acc.annotate(
+        f"Student {STUDENT_BASELINE_R10:.4f}",
+        xy=(annotation_x, STUDENT_BASELINE_R10),
+        xytext=(8, 8),
+        textcoords="offset points",
+        color=student_line_color,
+        fontsize=10,
+        fontweight="bold",
+        bbox={"facecolor": "white", "edgecolor": student_line_color, "alpha": 0.85, "pad": 2},
+    )
+    ax_acc.annotate(
+        f"Teacher {TEACHER_BASELINE_R10:.4f}",
+        xy=(annotation_x, TEACHER_BASELINE_R10),
+        xytext=(8, -18),
+        textcoords="offset points",
+        color=teacher_line_color,
+        fontsize=10,
+        fontweight="bold",
+        bbox={"facecolor": "white", "edgecolor": teacher_line_color, "alpha": 0.85, "pad": 2},
+    )
+
+    y_min, y_max = _compute_accuracy_ylim(recalls + train_val_recalls, [STUDENT_BASELINE_R10, TEACHER_BASELINE_R10])
+    ax_acc.set_ylim(y_min, y_max)
+    ax_acc.yaxis.set_major_locator(MaxNLocator(nbins=8))
+    ax_acc.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+    ax_acc.set_ylabel("Recall@10")
     ax_acc.set_title("Checkpoint Recall and Active Distillation Losses")
     ax_acc.legend(loc="best")
 

@@ -15,6 +15,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-text", action="store_true")
     parser.add_argument("--device", default="XR2 Gen 2 (Proxy)")
     parser.add_argument("--max-profiler-iterations", type=int, default=100)
+    parser.add_argument(
+        "--target-runtime",
+        choices=["precompiled_qnn_onnx", "qnn_dlc"],
+        default="precompiled_qnn_onnx",
+        help="QAI runtime target. Legacy CLIP flow uses precompiled_qnn_onnx.",
+    )
     return parser.parse_args()
 
 
@@ -65,6 +71,7 @@ def compile_model(model: onnx.ModelProto, device: qai_hub.Device, input_specs: d
         options=options,
     )
     compile_job.modify_sharing(add_emails=['lowpowervision@gmail.com'])
+    compile_job.modify_sharing(add_emails=['yiyanghung603@gmail.com'])
     return compile_job.job_id
 
 
@@ -95,10 +102,11 @@ def main() -> None:
     if not onnx_dir.exists():
         raise FileNotFoundError(f"ONNX directory not found: {onnx_dir}. Run export_onnx.py first.")
 
+    metadata = load_export_metadata(Path(args.metadata))
     image_path, text_path = resolve_onnx_paths(args)
     target_device = qai_hub.Device(args.device)
 
-    compile_options = "--target_runtime qnn_dlc --truncate_64bit_io"
+    compile_options = f"--target_runtime {args.target_runtime} --truncate_64bit_io"
 
     image_model = load_and_validate_onnx(image_path, "Image")
     print("\nSubmitting image compile job...")
@@ -112,12 +120,15 @@ def main() -> None:
 
     text_compile_id = None
     if text_path is not None:
+        text_dtype = "int64"
+        if metadata and metadata.get("text_input_dtype") in {"int64", "int32"}:
+            text_dtype = str(metadata["text_input_dtype"])
         text_model = load_and_validate_onnx(text_path, "Text")
         print("\nSubmitting text compile job...")
         text_compile_id = compile_model(
             model=text_model,
             device=target_device,
-            input_specs={"text": ((1, 77), "int32")},
+            input_specs={"text": ((1, 77), text_dtype)},
             options=compile_options,
         )
         print(f"Text compile job ID: {text_compile_id}")

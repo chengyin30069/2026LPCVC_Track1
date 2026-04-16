@@ -19,14 +19,30 @@ class StudentImageEncoderWrapper(nn.Module):
         return self.student_model(images)
 
 
-class TextEncoderWrapper(nn.Module):
-    def __init__(self, clip_model: nn.Module):
+class ClipImageEncoderWrapper(nn.Module):
+    def __init__(self, clip_model: nn.Module, *, normalize: bool = True):
         super().__init__()
         self.clip_model = clip_model
+        self.normalize = normalize
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        if self.normalize:
+            try:
+                return self.clip_model.encode_image(images, normalize=True)
+            except TypeError:
+                return F.normalize(self.clip_model.encode_image(images), dim=-1)
+        return self.clip_model.encode_image(images)
+
+
+class TextEncoderWrapper(nn.Module):
+    def __init__(self, clip_model: nn.Module, *, cast_input_to_int64: bool):
+        super().__init__()
+        self.clip_model = clip_model
+        self.cast_input_to_int64 = cast_input_to_int64
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
-        # Keep exported input dtype as int32 while converting to int64 for model internals.
-        token_ids = token_ids.to(torch.int64)
+        if self.cast_input_to_int64:
+            token_ids = token_ids.to(torch.int64)
         return F.normalize(self.clip_model.encode_text(token_ids), dim=-1)
 
 
@@ -34,17 +50,46 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export student checkpoint to ONNX.")
     parser.add_argument(
         "--student-checkpoint",
-        default="artifacts/student_distill_v4/best_loss_checkpoint.pt",
+        default="artifacts/student_checkpoint_deploy.pt",
         help="Path to trained student checkpoint.",
     )
     parser.add_argument("--output-dir", default="exported_onnx")
-    parser.add_argument("--image-onnx-name", default="student_image_encoder.onnx")
+    parser.add_argument("--image-onnx-name", default="image_encoder.onnx")
     parser.add_argument("--text-onnx-name", default="text_encoder.onnx")
-    parser.add_argument("--opset-version", type=int, default=18)
+    parser.add_argument("--opset-version", type=int, default=16)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--context-length", type=int, default=77)
     parser.add_argument("--vocab-size", type=int, default=49408)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument(
+        "--export-original-clip-arch",
+        action="store_true",
+        help=(
+            "Export image encoder with original OpenCLIP architecture (clip_model.encode_image) "
+            "instead of StudentImageModel projection_head path."
+        ),
+    )
+    parser.add_argument(
+        "--no-image-normalize",
+        action="store_true",
+        help="Do not apply final embedding normalization in image ONNX output.",
+    )
+    parser.add_argument(
+        "--external-data",
+        action="store_true",
+        help="Export ONNX weights as sidecar .onnx.data files (disabled by default).",
+    )
+    parser.add_argument(
+        "--no-dynamo-export",
+        action="store_true",
+        help="Use legacy Torch ONNX exporter (dynamo=False) for maximum converter compatibility.",
+    )
+    parser.add_argument(
+        "--text-input-dtype",
+        choices=["int64", "int32"],
+        default="int32",
+        help="Exported text encoder input dtype. Legacy QAI flow expects int64.",
+    )
     parser.add_argument("--skip-text-encoder", action="store_true")
     parser.add_argument("--device", default="cpu")
     return parser.parse_args()
@@ -57,6 +102,9 @@ def export_onnx_model(
     input_names: list[str],
     output_names: list[str],
     opset_version: int,
+    *,
+    external_data: bool,
+    dynamo_export: bool,
 ) -> None:
     torch.onnx.export(
         model,
@@ -70,7 +118,8 @@ def export_onnx_model(
         verbose=False,
         export_params=True,
         training=torch.onnx.TrainingMode.EVAL,
-        dynamo=True,
+        dynamo=dynamo_export,
+        external_data=external_data,
     )
 
 
@@ -104,7 +153,12 @@ def main() -> None:
             f"missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}"
         )
 
-    image_encoder = StudentImageEncoderWrapper(student_model).eval()
+    if args.export_original_clip_arch:
+        image_encoder = ClipImageEncoderWrapper(clip_model, normalize=not args.no_image_normalize).eval()
+        print("Image export mode: original OpenCLIP architecture (no student projection_head).")
+    else:
+        image_encoder = StudentImageEncoderWrapper(student_model).eval()
+        print("Image export mode: distilled StudentImageModel architecture (includes projection_head).")
 
     dummy_image_input = torch.rand(
         args.batch_size,
@@ -123,16 +177,19 @@ def main() -> None:
         input_names=["image"],
         output_names=["embedding"],
         opset_version=args.opset_version,
+        external_data=args.external_data,
+        dynamo_export=not args.no_dynamo_export,
     )
 
     text_onnx_path = None
     if not args.skip_text_encoder:
-        text_encoder = TextEncoderWrapper(clip_model).eval()
+        text_encoder = TextEncoderWrapper(clip_model, cast_input_to_int64=(args.text_input_dtype == "int32")).eval()
+        text_dummy_dtype = torch.int64 if args.text_input_dtype == "int64" else torch.int32
         dummy_text_input = torch.randint(
             low=0,
             high=args.vocab_size,
             size=(args.batch_size, args.context_length),
-            dtype=torch.int32,
+            dtype=text_dummy_dtype,
             device=device,
         )
         text_onnx_path = output_dir / args.text_onnx_name
@@ -144,6 +201,8 @@ def main() -> None:
             input_names=["text"],
             output_names=["text_embedding"],
             opset_version=args.opset_version,
+            external_data=args.external_data,
+            dynamo_export=not args.no_dynamo_export,
         )
 
     metadata = {
@@ -151,6 +210,11 @@ def main() -> None:
         "student_model_id": student_model_id,
         "image_onnx": str(image_onnx_path),
         "text_onnx": str(text_onnx_path) if text_onnx_path is not None else None,
+        "image_export_architecture": "openclip" if args.export_original_clip_arch else "student_with_projection_head",
+        "image_normalized_output": not args.no_image_normalize,
+        "external_data": args.external_data,
+        "text_input_dtype": args.text_input_dtype,
+        "dynamo_export": not args.no_dynamo_export,
         "opset_version": args.opset_version,
         "image_size": args.image_size,
         "context_length": args.context_length,
@@ -158,6 +222,15 @@ def main() -> None:
     }
     metadata_path = output_dir / "export_metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    if not args.external_data:
+        image_sidecar = image_onnx_path.with_suffix(image_onnx_path.suffix + ".data")
+        if image_sidecar.exists():
+            print(f"Warning: unexpected sidecar file generated: {image_sidecar}")
+        if text_onnx_path is not None:
+            text_sidecar = text_onnx_path.with_suffix(text_onnx_path.suffix + ".data")
+            if text_sidecar.exists():
+                print(f"Warning: unexpected sidecar file generated: {text_sidecar}")
 
     print("\nExport complete.")
     print(f"Metadata written to: {metadata_path}")

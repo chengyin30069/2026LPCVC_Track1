@@ -11,6 +11,7 @@ from pathlib import Path
 import open_clip
 import torch
 import torch.distributed as dist
+import torch.distributed.nn as dist_nn
 import torch.nn.functional as F
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -46,15 +47,6 @@ from .losses import compute_losses, evaluate_val_recall_at_k
 from .optim import build_cosine_scheduler, interpolate_weight
 
 
-class EncodeImageForward(nn.Module):
-    def __init__(self, clip_model: nn.Module):
-        super().__init__()
-        self.clip_model = clip_model
-
-    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        return self.clip_model.encode_image(pixel_values)
-
-
 LOSS_DISPLAY_SPECS: list[tuple[str, str, str]] = [
     ("contrastive_weight", "contrastive_loss", "ctr"),
     ("distill_weight", "distill_loss", "dist"),
@@ -79,6 +71,20 @@ LOSS_DISPLAY_SPECS: list[tuple[str, str, str]] = [
 
 def _is_dist_ready() -> bool:
     return dist.is_available() and dist.is_initialized()
+
+
+def _gather_with_grad(tensor: torch.Tensor | None) -> torch.Tensor | None:
+    if tensor is None or not _is_dist_ready():
+        return tensor
+    return torch.cat(dist_nn.all_gather(tensor), dim=0)
+
+
+def _gather_without_grad(tensor: torch.Tensor | None) -> torch.Tensor | None:
+    if tensor is None or not _is_dist_ready():
+        return tensor
+    gathered = [torch.zeros_like(tensor) for _ in range(dist.get_world_size())]
+    dist.all_gather(gathered, tensor)
+    return torch.cat(gathered, dim=0)
 
 
 def _get_text_blocks(clip_model: nn.Module) -> list[nn.Module]:
@@ -230,8 +236,6 @@ def save_training_checkpoint(
 
 
 def run_training(args) -> None:
-    validate_args(args)
-
     primary_device, device_ids = parse_device_spec(args.device)
     args.device = primary_device
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -267,6 +271,53 @@ def run_training(args) -> None:
         world_size = 1
         rank = 0
         is_main_process = True
+        if len(device_ids) > 1:
+            raise ValueError(
+                "Multiple GPUs detected in --device, but --ddp is disabled. "
+                "Use torchrun with --ddp for balanced multi-GPU training."
+            )
+
+    resume_payload = None
+    resume_epoch = 0
+    history: list[dict[str, float]] = []
+    if args.resume_checkpoint:
+        resume_path = resolve_resume_checkpoint_path(args.resume_checkpoint)
+        resume_payload = torch.load(resume_path, map_location="cpu")
+        resume_epoch = int(resume_payload.get("epoch", 0) or 0)
+        history = list(resume_payload.get("history", []))
+        resume_args = resume_payload.get("args") or {}
+
+        default_restore_fields = (
+            ("img_list", "dataset/img_list.csv"),
+            ("image_folder", "dataset/images"),
+            ("teacher_embeddings", "artifacts/teacher_image_embeddings.npz"),
+            ("output_dir", "artifacts/student_distill_v6"),
+        )
+        for field_name, default_value in default_restore_fields:
+            resume_value = resume_args.get(field_name)
+            if resume_value and getattr(args, field_name, None) == default_value:
+                setattr(args, field_name, resume_value)
+                if is_main_process:
+                    print(f"Resume checkpoint arg restored: --{field_name.replace('_', '-')}={resume_value}")
+
+        optional_restore_fields = ("text_embeddings", "teacher_text_embeddings", "hard_negatives")
+        for field_name in optional_restore_fields:
+            resume_value = resume_args.get(field_name)
+            if resume_value and not getattr(args, field_name, None):
+                setattr(args, field_name, resume_value)
+                if is_main_process:
+                    print(f"Resume checkpoint arg restored: --{field_name.replace('_', '-')}={resume_value}")
+
+        checkpoint_model_id = resume_payload.get("student_model_id")
+        if checkpoint_model_id:
+            if checkpoint_model_id != args.student_model_id and is_main_process:
+                print(
+                    "Resume checkpoint model_id differs from --student-model-id; "
+                    f"using checkpoint model_id: {checkpoint_model_id}"
+                )
+            args.student_model_id = checkpoint_model_id
+
+    validate_args(args)
 
     contrastive_final_weight = args.contrastive_weight if args.contrastive_final_weight is None else args.contrastive_final_weight
     distill_final_weight = args.distill_weight if args.distill_final_weight is None else args.distill_final_weight
@@ -340,24 +391,6 @@ def run_training(args) -> None:
     configure_cuda_runtime(device=args.device, allow_tf32=not args.no_tf32)
     num_workers = resolve_num_workers(args.num_workers, args.device)
 
-    resume_payload = None
-    resume_epoch = 0
-    history: list[dict[str, float]] = []
-    if args.resume_checkpoint:
-        resume_path = resolve_resume_checkpoint_path(args.resume_checkpoint)
-        resume_payload = torch.load(resume_path, map_location="cpu")
-        resume_epoch = int(resume_payload.get("epoch", 0) or 0)
-        history = list(resume_payload.get("history", []))
-        checkpoint_model_id = resume_payload.get("student_model_id")
-        if checkpoint_model_id:
-            if checkpoint_model_id != args.student_model_id:
-                if is_main_process:
-                    print(
-                        "Resume checkpoint model_id differs from --student-model-id; "
-                        f"using checkpoint model_id: {checkpoint_model_id}"
-                    )
-            args.student_model_id = checkpoint_model_id
-
     text_cache = load_text_embedding_cache(args.text_embeddings) if text_supervision_enabled else None
     teacher_text_cache = load_text_embedding_cache(args.teacher_text_embeddings) if args.teacher_text_embeddings else None
     teacher_cache = load_image_embedding_cache(args.teacher_embeddings)
@@ -370,6 +403,33 @@ def run_training(args) -> None:
     for parameter in reference_model.parameters():
         parameter.requires_grad = False
     student_model = StudentImageModel(model).to(args.device)
+
+    if args.train_logit_scale:
+        if is_main_process:
+            print(
+                "Disabling --train-logit-scale: current loss path uses scalar temperature values and "
+                "does not backpropagate to clip.logit_scale."
+            )
+        args.train_logit_scale = False
+
+    if (
+        not args.online_student_text
+        and (
+            args.unfreeze_text_tower
+            or args.unfreeze_text_last_n_blocks > 0
+            or args.progressive_unfreeze_text
+            or args.max_unfreeze_text_last_n_blocks > 0
+        )
+    ):
+        if is_main_process:
+            print(
+                "Disabling text-tower unfreeze/progressive-unfreeze because --online-student-text is disabled; "
+                "cached text embeddings are used and text parameters would be unused in DDP."
+            )
+        args.unfreeze_text_tower = False
+        args.unfreeze_text_last_n_blocks = 0
+        args.progressive_unfreeze_text = False
+        args.max_unfreeze_text_last_n_blocks = 0
 
     # Initialize teacher projector for cross-dimension distillation (e.g. 512 -> 1280)
     teacher_embed_dim = int(teacher_cache["embeddings"].shape[1])
@@ -408,9 +468,6 @@ def run_training(args) -> None:
     if args.gradient_checkpointing and hasattr(student_model.clip_model, "set_grad_checkpointing"):
         student_model.clip_model.set_grad_checkpointing(True)
 
-    if ddp_enabled and args.online_student_text:
-        raise ValueError("DDP mode currently does not support --online-student-text")
-
     student_model_core = student_model
     student_model_runner: nn.Module = student_model
     if ddp_enabled:
@@ -420,16 +477,6 @@ def run_training(args) -> None:
             output_device=torch.cuda.current_device(),
             find_unused_parameters=args.ddp_find_unused_parameters,
         )
-
-    use_data_parallel = (not ddp_enabled) and args.device.startswith("cuda") and len(device_ids) > 1
-    student_backbone_parallel = None
-    reference_backbone_parallel = None
-    teacher_intermediate_parallel = None
-    if use_data_parallel:
-        student_backbone_parallel = nn.DataParallel(EncodeImageForward(student_model_core.clip_model), device_ids=device_ids)
-        reference_backbone_parallel = nn.DataParallel(EncodeImageForward(reference_model.clip_model), device_ids=device_ids)
-        if is_main_process:
-            print(f"Enabled DataParallel backbone encoding on devices: {device_ids} (primary={args.device})")
 
     intermediate_distill_enabled = args.intermediate_distill_weight > 0 or intermediate_distill_final_weight > 0
     teacher_intermediate_model = None
@@ -459,8 +506,6 @@ def run_training(args) -> None:
         teacher_intermediate_model = teacher_intermediate_model.to(args.device).eval()
         for parameter in teacher_intermediate_model.parameters():
             parameter.requires_grad = False
-        if use_data_parallel:
-            teacher_intermediate_parallel = nn.DataParallel(EncodeImageForward(teacher_intermediate_model), device_ids=device_ids)
 
         student_blocks = get_vision_blocks(student_model_core.clip_model)
         teacher_blocks = get_vision_blocks(teacher_intermediate_model)
@@ -540,6 +585,12 @@ def run_training(args) -> None:
     train_dataset, val_dataset = build_train_val_subsets(dataset, val_split=args.val_split, seed=args.seed)
 
     pin_memory = args.pin_memory if args.pin_memory is not None else args.device.startswith("cuda")
+    per_device_batch_size = args.batch_size_per_gpu if ddp_enabled and args.batch_size_per_gpu > 0 else args.batch_size
+    if ddp_enabled and per_device_batch_size < 1:
+        raise ValueError("--batch-size-per-gpu (or --batch-size) must be >= 1 in DDP mode")
+    if not ddp_enabled and args.batch_size_per_gpu > 0 and is_main_process:
+        print("--batch-size-per-gpu is ignored when DDP is disabled.")
+
     train_sampler = None
     val_sampler = None
     if ddp_enabled:
@@ -559,7 +610,7 @@ def run_training(args) -> None:
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=per_device_batch_size,
         shuffle=train_sampler is None,
         sampler=train_sampler,
         num_workers=num_workers,
@@ -572,7 +623,7 @@ def run_training(args) -> None:
     if val_dataset is not None:
         val_loader = DataLoader(
             val_dataset,
-            batch_size=args.batch_size,
+            batch_size=per_device_batch_size,
             shuffle=False,
             sampler=val_sampler,
             num_workers=num_workers,
@@ -588,14 +639,27 @@ def run_training(args) -> None:
     if resume_payload is not None and "contrastive_log_temperature" in resume_payload:
         contrastive_log_temperature.data.copy_(resume_payload["contrastive_log_temperature"].to(args.device))
 
-    optimizer_parameters = list(student_model.parameters())
+    named_parameters = list(student_model.named_parameters())
+    no_decay_params = [
+        parameter
+        for name, parameter in named_parameters
+        if parameter.ndim < 2 or "bn" in name or "ln" in name or "bias" in name or "logit_scale" in name
+    ]
+    decay_params = [
+        parameter
+        for name, parameter in named_parameters
+        if not (parameter.ndim < 2 or "bn" in name or "ln" in name or "bias" in name or "logit_scale" in name)
+    ]
+    optimizer_param_groups: list[dict] = [
+        {"params": no_decay_params, "weight_decay": 0.0},
+        {"params": decay_params, "weight_decay": args.weight_decay},
+    ]
     if args.learnable_temperature:
-        optimizer_parameters.append(contrastive_log_temperature)
+        optimizer_param_groups.append({"params": [contrastive_log_temperature], "weight_decay": 0.0})
 
     optimizer = torch.optim.AdamW(
-        optimizer_parameters,
+        optimizer_param_groups,
         lr=args.lr,
-        weight_decay=args.weight_decay,
         betas=(args.adam_beta1, args.adam_beta2),
         eps=args.adam_eps,
     )
@@ -619,10 +683,30 @@ def run_training(args) -> None:
         scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
 
     if args.resume_optimizer_state and resume_payload is not None:
-        if resume_payload.get("optimizer_state_dict") is not None:
-            optimizer.load_state_dict(resume_payload["optimizer_state_dict"])
+        optimizer_state_loaded = False
+        saved_optimizer_state = resume_payload.get("optimizer_state_dict")
+        if saved_optimizer_state is not None:
+            saved_groups = list(saved_optimizer_state.get("param_groups", []))
+            current_groups = list(optimizer.state_dict().get("param_groups", []))
+            same_group_count = len(saved_groups) == len(current_groups)
+            same_group_sizes = same_group_count and all(
+                len(saved_group.get("params", [])) == len(current_group.get("params", []))
+                for saved_group, current_group in zip(saved_groups, current_groups)
+            )
+            if same_group_sizes:
+                optimizer.load_state_dict(saved_optimizer_state)
+                optimizer_state_loaded = True
+            elif is_main_process:
+                print(
+                    "Skipping optimizer state restore due to parameter-group mismatch: "
+                    f"checkpoint_groups={len(saved_groups)}, current_groups={len(current_groups)}. "
+                    "Model weights are resumed; optimizer will be re-initialized."
+                )
         if scheduler is not None and resume_payload.get("scheduler_state_dict") is not None:
-            scheduler.load_state_dict(resume_payload["scheduler_state_dict"])
+            if optimizer_state_loaded:
+                scheduler.load_state_dict(resume_payload["scheduler_state_dict"])
+            elif is_main_process:
+                print("Skipping scheduler state restore because optimizer state was not restored.")
         if resume_payload.get("scaler_state_dict") is not None:
             scaler.load_state_dict(resume_payload["scaler_state_dict"])
 
@@ -634,10 +718,6 @@ def run_training(args) -> None:
         best_total_loss = min(best_total_loss, float(resume_payload["best_total_loss"]))
 
     can_compute_val_recall = val_loader is not None and text_embeddings is not None and text_supervision_enabled
-    if ddp_enabled and can_compute_val_recall:
-        if is_main_process:
-            print("Validation Recall@10 is disabled in DDP mode; use benchmark sweep checkpoints for accuracy tracking.")
-        can_compute_val_recall = False
     if can_compute_val_recall and args.val_recall_source != "all":
         has_val_recall_source_samples = any(
             matches_source_filter(str(sample.get("image_name", "")), args.val_recall_source)
@@ -681,6 +761,12 @@ def run_training(args) -> None:
         print(f"Training samples: {len(train_dataset)}")
         if val_dataset is not None:
             print(f"Validation samples: {len(val_dataset)}")
+        effective_global_batch = per_device_batch_size * max(1, world_size) * max(1, args.grad_accumulation)
+        print(
+            "Batch setup: "
+            f"per_gpu={per_device_batch_size}, world_size={world_size}, grad_accum={args.grad_accumulation}, "
+            f"effective_global_batch={effective_global_batch}"
+        )
         print(f"Trainable modules: {', '.join(trainable_modules)}")
         print(f"Trainable parameters: {count_trainable_parameters(student_model):,}")
 
@@ -948,22 +1034,13 @@ def run_training(args) -> None:
             with autocast_context:
                 with torch.no_grad():
                     if apply_intermediate_distill:
-                        if teacher_intermediate_parallel is not None:
-                            teacher_intermediate_parallel(pixel_values)
-                        else:
-                            teacher_intermediate_model.encode_image(pixel_values)
-                    if reference_backbone_parallel is not None:
-                        reference_backbone_features = reference_backbone_parallel(pixel_values)
-                    else:
-                        reference_backbone_features = reference_model.encode_backbone(pixel_values)
+                        teacher_intermediate_model.encode_image(pixel_values)
+                    reference_backbone_features = reference_model.encode_backbone(pixel_values)
                     reference_embeddings = reference_model.projection_head(reference_backbone_features)
 
                 student_backbone_features = None
                 if current_backbone_feature_distill_weight > 0:
-                    if student_backbone_parallel is not None:
-                        student_backbone_features = student_backbone_parallel(pixel_values)
-                    else:
-                        student_backbone_features = student_model.encode_backbone(pixel_values)
+                    student_backbone_features = student_model.encode_backbone(pixel_values)
                     student_embeddings = student_model.projection_head(student_backbone_features)
                 else:
                     student_embeddings = student_model_runner(pixel_values)
@@ -985,15 +1062,40 @@ def run_training(args) -> None:
                 ):
                     student_projected_text = student_model.project_to_teacher(positive_embeddings)
 
+                loss_student_embeddings = student_embeddings
+                loss_positive_embeddings = positive_embeddings
+                loss_teacher_targets = teacher_targets
+                loss_reference_embeddings = reference_embeddings
+                loss_teacher_positive_embeddings = teacher_positive_embeddings
+                loss_negative_embeddings = negative_embeddings
+                loss_negative_mask = negative_mask
+                loss_student_projected = student_projected
+                loss_student_projected_text = student_projected_text
+                loss_student_backbone_features = student_backbone_features
+                loss_reference_backbone_features = reference_backbone_features
+
+                if ddp_enabled:
+                    loss_student_embeddings = _gather_with_grad(student_embeddings)
+                    loss_positive_embeddings = _gather_with_grad(positive_embeddings)
+                    loss_teacher_targets = _gather_without_grad(teacher_targets)
+                    loss_reference_embeddings = _gather_without_grad(reference_embeddings)
+                    loss_teacher_positive_embeddings = _gather_without_grad(teacher_positive_embeddings)
+                    loss_negative_embeddings = _gather_without_grad(negative_embeddings)
+                    loss_negative_mask = _gather_without_grad(negative_mask.float()).to(dtype=torch.bool) if negative_mask is not None else None
+                    loss_student_projected = _gather_with_grad(student_projected)
+                    loss_student_projected_text = _gather_with_grad(student_projected_text)
+                    loss_student_backbone_features = _gather_with_grad(student_backbone_features)
+                    loss_reference_backbone_features = _gather_without_grad(reference_backbone_features)
+
                 current_temperature = contrastive_log_temperature.exp().clamp(min=args.min_temperature, max=args.max_temperature)
                 loss, metrics = compute_losses(
-                    student_embeddings=student_embeddings,
-                    reference_embeddings=reference_embeddings,
-                    positive_embeddings=positive_embeddings,
-                    teacher_positive_embeddings=teacher_positive_embeddings,
-                    teacher_embeddings=teacher_targets,
-                    negative_embeddings=negative_embeddings,
-                    negative_mask=negative_mask,
+                    student_embeddings=loss_student_embeddings,
+                    reference_embeddings=loss_reference_embeddings,
+                    positive_embeddings=loss_positive_embeddings,
+                    teacher_positive_embeddings=loss_teacher_positive_embeddings,
+                    teacher_embeddings=loss_teacher_targets,
+                    negative_embeddings=loss_negative_embeddings,
+                    negative_mask=loss_negative_mask,
                     temperature=float(current_temperature.detach()),
                     contrastive_weight=current_contrastive_weight,
                     contrastive_loss_type=args.contrastive_loss_type,
@@ -1016,8 +1118,8 @@ def run_training(args) -> None:
                     memory_bank_teacher=memory_bank_teacher,
                     memory_bank_min_samples=args.memory_bank_min_samples,
                     backbone_feature_distill_weight=current_backbone_feature_distill_weight,
-                    student_backbone_features=student_backbone_features,
-                    reference_backbone_features=reference_backbone_features,
+                    student_backbone_features=loss_student_backbone_features,
+                    reference_backbone_features=loss_reference_backbone_features,
                     distill_teacher_temperature=args.distill_teacher_temperature,
                     distill_student_temperature=args.distill_student_temperature,
                     feature_distill_weight=current_feature_distill_weight,
@@ -1027,8 +1129,8 @@ def run_training(args) -> None:
                     augmented_feature_distill_weight=current_augmented_feature_distill_weight,
                     augmented_feature_noise_std=args.augmented_feature_noise_std,
                     projected_fd_weight=current_projected_fd_weight,
-                    student_projected_embeddings=student_projected,
-                    student_projected_text_embeddings=student_projected_text,
+                    student_projected_embeddings=loss_student_projected,
+                    student_projected_text_embeddings=loss_student_projected_text,
                     icl_loss_type=args.icl_loss_type,
                     clipkd_ckd_weight=current_clipkd_ckd_weight,
                     clipkd_cross_kd_weight=current_clipkd_cross_kd_weight,
@@ -1045,14 +1147,24 @@ def run_training(args) -> None:
                 metrics["total_loss"] = float(loss.detach().cpu())
                 scaled_loss = loss / args.grad_accumulation
 
-            scaler.scale(scaled_loss).backward()
+            should_step_optimizer = step % args.grad_accumulation == 0 or step == len(train_loader)
+            sync_context = (
+                student_model_runner.no_sync()  # type: ignore[attr-defined]
+                if ddp_enabled and not should_step_optimizer
+                else nullcontext()
+            )
+            with sync_context:
+                scaler.scale(scaled_loss).backward()
 
-            if step % args.grad_accumulation == 0 or step == len(train_loader):
+            if should_step_optimizer:
                 if args.grad_clip_norm > 0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(list(get_trainable_parameters(student_model)), max_norm=args.grad_clip_norm)
                 scaler.step(optimizer)
                 scaler.update()
+                if args.train_logit_scale and hasattr(student_model.clip_model, "logit_scale"):
+                    with torch.no_grad():
+                        student_model.clip_model.logit_scale.clamp_(0, math.log(100))
                 if scheduler is not None:
                     scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -1171,21 +1283,12 @@ def run_training(args) -> None:
 
                     with autocast_context:
                         if apply_intermediate_distill_val:
-                            if teacher_intermediate_parallel is not None:
-                                teacher_intermediate_parallel(pixel_values)
-                            else:
-                                teacher_intermediate_model.encode_image(pixel_values)
-                        if reference_backbone_parallel is not None:
-                            reference_backbone_features = reference_backbone_parallel(pixel_values)
-                        else:
-                            reference_backbone_features = reference_model.encode_backbone(pixel_values)
+                            teacher_intermediate_model.encode_image(pixel_values)
+                        reference_backbone_features = reference_model.encode_backbone(pixel_values)
                         reference_embeddings = reference_model.projection_head(reference_backbone_features)
                         student_backbone_features = None
                         if current_backbone_feature_distill_weight > 0:
-                            if student_backbone_parallel is not None:
-                                student_backbone_features = student_backbone_parallel(pixel_values)
-                            else:
-                                student_backbone_features = student_model.encode_backbone(pixel_values)
+                            student_backbone_features = student_model.encode_backbone(pixel_values)
                             student_embeddings = student_model.projection_head(student_backbone_features)
                         else:
                             student_embeddings = student_model_runner(pixel_values)
@@ -1207,14 +1310,43 @@ def run_training(args) -> None:
                         ):
                             val_student_projected_text = student_model.project_to_teacher(positive_embeddings)
 
+                        val_loss_student_embeddings = student_embeddings
+                        val_loss_positive_embeddings = positive_embeddings
+                        val_loss_teacher_targets = teacher_targets
+                        val_loss_reference_embeddings = reference_embeddings
+                        val_loss_teacher_positive_embeddings = teacher_positive_embeddings
+                        val_loss_negative_embeddings = negative_embeddings
+                        val_loss_negative_mask = negative_mask
+                        val_loss_student_projected = val_student_projected
+                        val_loss_student_projected_text = val_student_projected_text
+                        val_loss_student_backbone_features = student_backbone_features
+                        val_loss_reference_backbone_features = reference_backbone_features
+
+                        if ddp_enabled:
+                            val_loss_student_embeddings = _gather_without_grad(student_embeddings)
+                            val_loss_positive_embeddings = _gather_without_grad(positive_embeddings)
+                            val_loss_teacher_targets = _gather_without_grad(teacher_targets)
+                            val_loss_reference_embeddings = _gather_without_grad(reference_embeddings)
+                            val_loss_teacher_positive_embeddings = _gather_without_grad(teacher_positive_embeddings)
+                            val_loss_negative_embeddings = _gather_without_grad(negative_embeddings)
+                            val_loss_negative_mask = (
+                                _gather_without_grad(negative_mask.float()).to(dtype=torch.bool)
+                                if negative_mask is not None
+                                else None
+                            )
+                            val_loss_student_projected = _gather_without_grad(val_student_projected)
+                            val_loss_student_projected_text = _gather_without_grad(val_student_projected_text)
+                            val_loss_student_backbone_features = _gather_without_grad(student_backbone_features)
+                            val_loss_reference_backbone_features = _gather_without_grad(reference_backbone_features)
+
                         val_loss, val_metrics = compute_losses(
-                            student_embeddings=student_embeddings,
-                            reference_embeddings=reference_embeddings,
-                            positive_embeddings=positive_embeddings,
-                            teacher_positive_embeddings=teacher_positive_embeddings,
-                            teacher_embeddings=teacher_targets,
-                            negative_embeddings=negative_embeddings,
-                            negative_mask=negative_mask,
+                            student_embeddings=val_loss_student_embeddings,
+                            reference_embeddings=val_loss_reference_embeddings,
+                            positive_embeddings=val_loss_positive_embeddings,
+                            teacher_positive_embeddings=val_loss_teacher_positive_embeddings,
+                            teacher_embeddings=val_loss_teacher_targets,
+                            negative_embeddings=val_loss_negative_embeddings,
+                            negative_mask=val_loss_negative_mask,
                             temperature=float(
                                 contrastive_log_temperature.exp().clamp(min=args.min_temperature, max=args.max_temperature).detach()
                             ),
@@ -1239,8 +1371,8 @@ def run_training(args) -> None:
                             memory_bank_teacher=None,
                             memory_bank_min_samples=args.memory_bank_min_samples,
                             backbone_feature_distill_weight=current_backbone_feature_distill_weight,
-                            student_backbone_features=student_backbone_features,
-                            reference_backbone_features=reference_backbone_features,
+                            student_backbone_features=val_loss_student_backbone_features,
+                            reference_backbone_features=val_loss_reference_backbone_features,
                             distill_teacher_temperature=args.distill_teacher_temperature,
                             distill_student_temperature=args.distill_student_temperature,
                             feature_distill_weight=current_feature_distill_weight,
@@ -1250,8 +1382,8 @@ def run_training(args) -> None:
                             augmented_feature_distill_weight=current_augmented_feature_distill_weight,
                             augmented_feature_noise_std=args.augmented_feature_noise_std,
                             projected_fd_weight=current_projected_fd_weight,
-                            student_projected_embeddings=val_student_projected,
-                            student_projected_text_embeddings=val_student_projected_text,
+                            student_projected_embeddings=val_loss_student_projected,
+                            student_projected_text_embeddings=val_loss_student_projected_text,
                             icl_loss_type=args.icl_loss_type,
                             clipkd_ckd_weight=current_clipkd_ckd_weight,
                             clipkd_cross_kd_weight=current_clipkd_cross_kd_weight,
@@ -1282,21 +1414,73 @@ def run_training(args) -> None:
             val_metrics_avg = {f"val_{key}": value / max(1, synced_val_batches) for key, value in synced_val_running.items()}
             epoch_metrics.update(val_metrics_avg)
 
-            if can_compute_val_recall and val_recall_embeddings and val_recall_sample_indices:
-                val_recall_at_10 = evaluate_val_recall_at_k(
-                    image_embeddings=torch.cat(val_recall_embeddings, dim=0),
-                    sample_indices=torch.cat(val_recall_sample_indices, dim=0),
-                    dataset=dataset,
-                    text_embeddings=text_embeddings,
-                    top_k=10,
-                    image_chunk_size=args.val_recall_image_chunk_size,
-                    text_chunk_size=args.val_recall_text_chunk_size,
-                    max_texts=args.val_recall_max_texts,
-                    source_filter=args.val_recall_source,
-                    device=args.device,
+            if can_compute_val_recall:
+                local_recall_embeddings = (
+                    torch.cat(val_recall_embeddings, dim=0) if val_recall_embeddings else torch.empty((0, student_model.embedding_dim))
                 )
-                if val_recall_at_10 is not None:
-                    epoch_metrics["val_recall_at_10"] = float(val_recall_at_10)
+                local_recall_sample_indices = (
+                    torch.cat(val_recall_sample_indices, dim=0) if val_recall_sample_indices else torch.empty((0,), dtype=torch.long)
+                )
+                if ddp_enabled:
+                    gathered_payloads: list[dict[str, torch.Tensor]] = [  # type: ignore[assignment]
+                        {"image_embeddings": torch.empty((0, student_model.embedding_dim)), "sample_indices": torch.empty((0,), dtype=torch.long)}
+                        for _ in range(world_size)
+                    ]
+                    payload = {
+                        "image_embeddings": local_recall_embeddings.cpu(),
+                        "sample_indices": local_recall_sample_indices.cpu(),
+                    }
+                    dist.all_gather_object(gathered_payloads, payload)
+                    val_recall_at_10 = None
+                    if is_main_process:
+                        merged_embeddings = torch.cat([item["image_embeddings"] for item in gathered_payloads], dim=0)
+                        merged_sample_indices = torch.cat([item["sample_indices"] for item in gathered_payloads], dim=0)
+                        if merged_sample_indices.numel() > 0:
+                            keep_positions: list[int] = []
+                            seen_indices: set[int] = set()
+                            for idx_position, sample_index_value in enumerate(merged_sample_indices.tolist()):
+                                if sample_index_value in seen_indices:
+                                    continue
+                                seen_indices.add(sample_index_value)
+                                keep_positions.append(idx_position)
+                            if keep_positions:
+                                keep_tensor = torch.tensor(keep_positions, dtype=torch.long)
+                                merged_embeddings = merged_embeddings.index_select(0, keep_tensor)
+                                merged_sample_indices = merged_sample_indices.index_select(0, keep_tensor)
+                        val_recall_at_10 = evaluate_val_recall_at_k(
+                            image_embeddings=merged_embeddings,
+                            sample_indices=merged_sample_indices,
+                            dataset=dataset,
+                            text_embeddings=text_embeddings,
+                            top_k=10,
+                            image_chunk_size=args.val_recall_image_chunk_size,
+                            text_chunk_size=args.val_recall_text_chunk_size,
+                            max_texts=args.val_recall_max_texts,
+                            source_filter=args.val_recall_source,
+                            device=args.device,
+                        )
+                    recall_value_tensor = torch.tensor(
+                        -1.0 if val_recall_at_10 is None else float(val_recall_at_10),
+                        device=args.device,
+                    )
+                    dist.broadcast(recall_value_tensor, src=0)
+                    if float(recall_value_tensor.item()) >= 0:
+                        epoch_metrics["val_recall_at_10"] = float(recall_value_tensor.item())
+                elif val_recall_embeddings and val_recall_sample_indices:
+                    val_recall_at_10 = evaluate_val_recall_at_k(
+                        image_embeddings=local_recall_embeddings,
+                        sample_indices=local_recall_sample_indices,
+                        dataset=dataset,
+                        text_embeddings=text_embeddings,
+                        top_k=10,
+                        image_chunk_size=args.val_recall_image_chunk_size,
+                        text_chunk_size=args.val_recall_text_chunk_size,
+                        max_texts=args.val_recall_max_texts,
+                        source_filter=args.val_recall_source,
+                        device=args.device,
+                    )
+                    if val_recall_at_10 is not None:
+                        epoch_metrics["val_recall_at_10"] = float(val_recall_at_10)
 
             student_model.train()
             student_model_runner.train()

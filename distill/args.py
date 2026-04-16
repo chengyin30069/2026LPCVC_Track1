@@ -182,7 +182,7 @@ def apply_clipkd_upstream_bigg14_preset(args: argparse.Namespace) -> None:
     args.unfreeze_last_n_blocks = 2
     args.unfreeze_text_last_n_blocks = 2
     args.online_student_text = True
-    args.train_logit_scale = True
+    args.train_logit_scale = False
     args.val_split = 0.02
     args.val_recall_source = "all"
     args.val_recall_max_texts = 120000
@@ -243,15 +243,17 @@ def apply_clipkd_upstream_h14_preset(args: argparse.Namespace) -> None:
     args.baseline_anchor_final_weight = 55.0
 
     # Training setup tuned for single 3090Ti and no forced early-stop.
-    args.epochs = 25
+    args.epochs = 20
     args.batch_size = 1024
     args.grad_accumulation = 2
     args.lr = 1.5e-5
     args.warmup_steps = 9000
     args.unfreeze_last_n_blocks = 2
     args.unfreeze_text_last_n_blocks = 1
-    args.online_student_text = False
-    args.train_logit_scale = False
+    args.progressive_unfreeze_text = True
+    args.max_unfreeze_text_last_n_blocks = 3
+    args.online_student_text = True
+    args.train_logit_scale = True
     args.val_split = 0.02
     args.val_recall_source = "all"
     args.val_recall_max_texts = 120000
@@ -311,6 +313,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--epochs", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--batch-size-per-gpu",
+        type=int,
+        default=0,
+        help="Per-GPU batch size in DDP mode (0 keeps --batch-size behavior).",
+    )
     parser.add_argument("--grad-accumulation", type=int, default=4)
     parser.add_argument("--lr", type=float, default=3e-6)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -804,7 +812,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         default="cuda:0" if torch.cuda.is_available() else "cpu",
-        help="Device spec, e.g. cuda:1 or comma-separated cuda:0,cuda:1 for DataParallel.",
+        help="Device spec, e.g. cuda:0. For multi-GPU, launch with torchrun + --ddp.",
     )
     args = parser.parse_args()
     if getattr(args, "clipkd_preset", "none") == "bigG14-fd-icl":
@@ -823,6 +831,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--grad-accumulation must be >= 1")
     if args.batch_size < 1:
         raise ValueError("--batch-size must be >= 1")
+    if args.batch_size_per_gpu < 0:
+        raise ValueError("--batch-size-per-gpu must be >= 0")
     if args.adam_beta1 <= 0 or args.adam_beta1 >= 1:
         raise ValueError("--adam-beta1 must be in (0, 1)")
     if args.adam_beta2 <= 0 or args.adam_beta2 >= 1:
