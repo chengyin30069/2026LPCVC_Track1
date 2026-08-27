@@ -1,85 +1,85 @@
-# Code organization
+# Code Organization
 
-這份索引以兩份最終簡報中的方法為準，將程式分成「最終主線」、「部署／驗證」、「問題修正」與「已封存實驗」。
+This index follows the methods described in the two final presentations. It classifies the code into the final pipeline, deployment and validation, issue-specific fixes, and archived experiments.
 
-## 1. 最終主線
+## 1. Final Pipelines
 
-### Distillation：H/14 teacher → B/16 student
+### Distillation: H/14 Teacher → B/16 Student
 
-| 檔案 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `train_student_distill.py` | 蒸餾訓練入口。 |
-| `distill/args.py` | 訓練參數與 teacher/student、loss 權重設定。 |
-| `distill/data.py` | Dataset、DataLoader 與 embedding cache 載入。 |
-| `distill/features.py` | Teacher/student feature extraction 與投影。 |
-| `distill/losses.py` | Feature distillation、contrastive 與 ICL 類損失。 |
-| `distill/optim.py` | Optimizer 與 learning-rate scheduler。 |
-| `distill/trainer.py` | 訓練、驗證、checkpoint 與 history 主迴圈。 |
-| `prepare_datacomp_track1_dataset.py` | 準備 DataComp / Track 1 蒸餾資料。 |
-| `prepare_image_only_distill_dataset.py` | 建立只需 image side 的蒸餾資料。 |
-| `prepare_track1_dataset.py` | 準備比賽格式資料與 metadata。 |
-| `precompute_teacher_embeddings.py` | 預先計算 H/14 teacher image embeddings。 |
-| `cache_text_embeddings.py` | 預先計算 text embeddings，降低訓練成本。 |
-| `mine_hard_negatives.py` | 建立 contrastive training 的 hard negatives。 |
-| `plot_training_history.py` | 畫 training / validation history。 |
-| `utils/student_model.py` | Student model 與 projection head 定義。 |
-| `utils/track1_utils.py` | Track 1 共用資料與評估工具。 |
-| `export_onnx.py` | 載入蒸餾 checkpoint，匯出 student image encoder 與 text encoder。 |
+| `train_student_distill.py` | Entry point for distillation training. |
+| `distill/args.py` | Training arguments, teacher/student settings, and loss weights. |
+| `distill/data.py` | Dataset and DataLoader construction, including embedding-cache loading. |
+| `distill/features.py` | Teacher/student feature extraction and projection. |
+| `distill/losses.py` | Feature-distillation, contrastive, and ICL-style losses. |
+| `distill/optim.py` | Optimizer and learning-rate scheduler setup. |
+| `distill/trainer.py` | Main training, validation, checkpointing, and history loop. |
+| `prepare_datacomp_track1_dataset.py` | Prepares DataComp and Track 1 data for distillation. |
+| `prepare_image_only_distill_dataset.py` | Builds an image-only distillation dataset. |
+| `prepare_track1_dataset.py` | Prepares competition-format data and metadata. |
+| `precompute_teacher_embeddings.py` | Precomputes H/14 teacher image embeddings. |
+| `cache_text_embeddings.py` | Precomputes text embeddings to reduce training cost. |
+| `mine_hard_negatives.py` | Builds hard negatives for contrastive training. |
+| `plot_training_history.py` | Plots training and validation history. |
+| `utils/student_model.py` | Defines the student model and projection head. |
+| `utils/track1_utils.py` | Shared Track 1 data and evaluation utilities. |
+| `export_onnx.py` | Loads a distilled checkpoint and exports the student image encoder and text encoder. |
 
-`student_checkpoint_epoch_13.pt` 與 embedding caches 是相關產物，但體積太大，不進 Git。
+`student_checkpoint_epoch_13.pt` and the embedding caches are related artifacts, but they are too large for the source repository and are excluded from Git.
 
-### Quantization：L/14 W8A16 → mixed precision → QAT
+### Quantization: L/14 W8A16 → Mixed Precision → QAT
 
-| 檔案 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `mixed_qat.py` | 最終 L/14 mixed-precision AIMET QAT；對選定 attention/MLP 算子配置 A8，其餘保留 A16。 |
-| `export_quantized_onnx.py` | 匯出 L/14 W8A16 QDQ ONNX、encoding 與 explicit-QKV graph。 |
-| `quantize_image.py` | Image encoder W8A16 PTQ / baseline。 |
-| `quantize_text.py` | Text encoder W8A16 PTQ 與 attention-mask 處理。 |
-| `analysis.py` | AIMET per-layer sensitivity / quantization analysis。 |
-| `reports/mixed_precision/mmp_log.txt` | 最終 L/14 各 block 的 mixed-precision 配置紀錄。 |
-| `reports/quant_analysis/text/` | Text quantization per-layer 分析報告。 |
+| `mixed_qat.py` | Final L/14 mixed-precision AIMET QAT pipeline. Selected attention/MLP operators use A8 while the remaining operators retain A16. |
+| `export_quantized_onnx.py` | Exports the L/14 W8A16 QDQ ONNX model, encodings, and explicit-QKV graph. |
+| `quantize_image.py` | Image-encoder W8A16 PTQ baseline. |
+| `quantize_text.py` | Text-encoder W8A16 PTQ and attention-mask handling. |
+| `analysis.py` | AIMET per-layer sensitivity and quantization analysis. |
+| `reports/mixed_precision/mmp_log.txt` | Mixed-precision configuration recorded for each block of the final L/14 model. |
+| `reports/quant_analysis/text/` | Per-layer text-quantization analysis reports. |
 
-`qat_clip_visual.pth` 是最終 L/14 QAT checkpoint，但不進 Git。
+`qat_clip_visual.pth` is the final L/14 QAT checkpoint, but it is excluded from Git.
 
-## 2. QNN deployment 與 retrieval 評估
+## 2. QNN Deployment and Retrieval Evaluation
 
-| 檔案 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `compile_and_profile.py` | 驗證 ONNX，送 QAI Hub 編譯成 QNN runtime target，並在 XR2 Gen 2 profile。 |
-| `upload_dataset.py` | 將 image/text 輸入整理並上傳到 QAI Hub dataset。 |
-| `inference.py` | 執行遠端 inference、收集 embeddings、計算 Recall@10。 |
-| `benchmark.py` | Retrieval similarity 與 Recall 指標共用函式。 |
-| `local_inference.py` | 本機 baseline / exported model 驗證。 |
-| `local_inference_openclip.py` | OpenCLIP reference output 驗證。 |
-| `utils/img_processing.py` | Image preprocessing。 |
-| `utils/text_processing.py` | Tokenization / text preprocessing。 |
-| `utils/Dataset.py` | 量化與評估用 dataset helper。 |
+| `compile_and_profile.py` | Validates ONNX, submits QAI Hub compilation for a QNN runtime target, and profiles on XR2 Gen 2. |
+| `upload_dataset.py` | Prepares image/text inputs and uploads them as QAI Hub datasets. |
+| `inference.py` | Runs remote inference, collects embeddings, and calculates Recall@10. |
+| `benchmark.py` | Shared retrieval-similarity and Recall metric functions. |
+| `local_inference.py` | Local baseline and exported-model validation. |
+| `local_inference_openclip.py` | OpenCLIP reference-output validation. |
+| `utils/img_processing.py` | Image preprocessing. |
+| `utils/text_processing.py` | Tokenization and text preprocessing. |
+| `utils/Dataset.py` | Dataset helpers used by quantization and evaluation. |
 
-## 3. QNN graph 問題修正與診斷
+## 3. QNN Graph Fixes and Diagnostics
 
-| 檔案 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `remove_transpose.py` | 將 Linear weight 的常數 transpose fold 掉，避免 QNN FC pattern 被 QDQ graph 打斷。 |
-| `add_zero_bias.py` | 對缺少 bias 的 graph 補零 bias，便於 QNN pattern matching。 |
-| `fix_input_rank.py` | 修正匯出後 input rank / shape 問題。 |
-| `compare_text_openclip_qdq.py` | 比較 OpenCLIP 與 QDQ text encoder 數值。 |
-| `mixed_test.py` | 以單一 ViT block 重現 mixed quant / graph 問題。 |
-| `split_attn_export.py` | 將 attention 拆成 explicit Q/K/V 的匯出實驗；保留作為 QNN 相容性工具。 |
+| `remove_transpose.py` | Folds constant transposes applied to Linear weights so QDQ nodes do not break QNN Fully Connected pattern matching. |
+| `add_zero_bias.py` | Adds zero biases to graph nodes that need a bias for QNN pattern matching. |
+| `fix_input_rank.py` | Fixes input-rank and shape issues after export. |
+| `compare_text_openclip_qdq.py` | Numerically compares the OpenCLIP and QDQ text encoders. |
+| `mixed_test.py` | Reproduces mixed-quantization and graph issues with a single ViT block. |
+| `split_attn_export.py` | Exports attention with explicit Q/K/V projections for QNN compatibility experiments. |
 
-這些不是訓練主入口，但直接對應最終成果中提到的 QNN compilation 與 attention-mask 問題，因此保留。
+These files are not primary training entry points, but they directly address the QNN compilation and attention-mask issues described in the final results, so they remain part of the repository.
 
-## 4. 已封存、不進最終 repository 的實驗
+## 4. Archived Experiments Excluded from the Final Repository
 
-所有項目都只是搬移，沒有刪除，位置在：
+The following items were moved rather than deleted and remain available at:
 
 `../unused_experiments/2026LPCVC_Track1/`
 
-- `code/`：早期 AIMET PTQ、手寫 encoding、H/14 mixed quant 與一次性測試程式。
-- `artifacts/H14-quant/`：簡報指出無法成功 compile 的 H/14 路線。
-- `artifacts/aimet_mixed_quant_image/`：被 H/14 實驗覆寫的舊輸出，不是最終 L/14 mixed-QAT 模型。
-- `artifacts/artifacts/`：早期 L/14 teacher / COCO 蒸餾 cache 與 checkpoint，不是最終 H/14 + CC3M 路線。
-- `artifacts/torch_smoothquant/`：SmoothQuant 實驗，未出現在最終方法。
-- 單一 ViT block ONNX 與大型外部 tensor data：只用於除錯，程式保留、生成物封存。
+- `code/`: early AIMET PTQ, manually generated encodings, H/14 mixed-quantization experiments, and one-off test scripts.
+- `artifacts/H14-quant/`: the H/14 path that failed to compile, as reported in the presentation.
+- `artifacts/aimet_mixed_quant_image/`: older output overwritten by an H/14 experiment; it is not the final L/14 mixed-QAT model.
+- `artifacts/artifacts/`: early L/14-teacher/COCO distillation caches and checkpoints, not the final H/14 + CC3M path.
+- `artifacts/torch_smoothquant/`: SmoothQuant experiments not used by the final method.
+- Single-block ViT ONNX files and large external tensor data: debugging artifacts whose generating code is retained in the main repository.
 
-工作區外層的第三方 repositories 與大型資料集沒有搬動，以免破壞既有環境或重複佔用磁碟；它們也不在此 Git repository 內。
+Third-party repositories and large datasets outside the workspace were not moved, to avoid breaking the existing environment or duplicating disk usage. They are not part of this Git repository.

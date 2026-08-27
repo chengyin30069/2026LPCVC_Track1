@@ -1,16 +1,16 @@
 # 2026 LPCVC Track 1 — Efficient Image–Text Retrieval
 
-這個 repository 整理本專案最後成果所使用的程式：CLIP image encoder 的混合精度量化與 QAT、以 H/14 teacher 蒸餾 B/16 student，以及在 Qualcomm QAI Hub / QNN HTP 上的編譯、效能量測與 Recall@10 評估。
+This repository contains the code used for the final project: mixed-precision quantization and quantization-aware training (QAT) for a CLIP image encoder, H/14-teacher-to-B/16-student distillation, and compilation, profiling, and Recall@10 evaluation on Qualcomm QAI Hub and the QNN HTP backend.
 
-## 最終方法主線
+## Final Pipelines
 
-1. **L/14 mixed-precision QAT**：以 W8A16 為基礎，對敏感算子配置 A8，再以 cosine feature loss 做 QAT。
-2. **H/14 → B/16 distillation**：使用預先計算的 teacher image embeddings 與 text embeddings，搭配 feature distillation、contrastive / ICL 類損失訓練 student。
-3. **QNN deployment**：匯出 ONNX、修正 QDQ graph、送至 QAI Hub 編譯為 QNN DLC，並在 XR2 Gen 2 (Proxy) profile。
+1. **L/14 mixed-precision QAT:** Start from W8A16, assign A8 to sensitive operators, and fine-tune with a cosine feature loss.
+2. **H/14 → B/16 distillation:** Train the student with precomputed teacher image and text embeddings using feature-distillation and contrastive/ICL-style losses.
+3. **QNN deployment:** Export ONNX, fix QDQ graph patterns, compile to a QNN DLC through QAI Hub, and profile on the XR2 Gen 2 (Proxy) device.
 
-完整檔案分工與「主線／輔助／封存」分類請看 [docs/CODE_ORGANIZATION.md](docs/CODE_ORGANIZATION.md)。
+See [docs/CODE_ORGANIZATION.md](docs/CODE_ORGANIZATION.md) for a complete classification of the primary pipeline, supporting tools, and archived experiments.
 
-## 環境
+## Environment
 
 ```bash
 python -m venv .venv
@@ -18,45 +18,45 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-量化程式另外需要與目前 PyTorch 版本相容的 Qualcomm AIMET，請依 AIMET 官方安裝方式建立環境；它未直接固定在 `requirements.txt`，避免 pip 裝到不相容版本。
+The quantization scripts also require a Qualcomm AIMET release compatible with the installed PyTorch version. AIMET is intentionally not pinned in `requirements.txt` to avoid installing an incompatible build; install it separately according to the official AIMET instructions.
 
-## 常用入口
+## Common Entry Points
 
 ```bash
-# 蒸餾訓練
+# Distillation training
 python train_student_distill.py --help
 
-# 將蒸餾 student / text encoder 匯出成 ONNX
+# Export the distilled student and text encoder to ONNX
 python export_onnx.py --help
 
-# 匯出 L/14 W8A16 QDQ ONNX 與 encoding
+# Export the L/14 W8A16 QDQ ONNX model and encodings
 python export_quantized_onnx.py --help
 
 # L/14 mixed-precision QAT
 python mixed_qat.py
 
-# QAI Hub 編譯與 profile
+# Compile and profile through QAI Hub
 python compile_and_profile.py --help
 
-# 上傳資料並計算 retrieval 指標
+# Upload evaluation inputs and calculate retrieval metrics
 python upload_dataset.py
 python inference.py
 ```
 
-`upload_dataset.py` 與 `inference.py` 目前仍使用檔案內設定值；執行前先填入本機資料路徑與 QAI Hub job / dataset IDs。
+`upload_dataset.py` and `inference.py` currently use configuration values defined in the source files. Set the local data paths and QAI Hub job/dataset IDs before running them.
 
-## 模型與資料
+## Models and Data
 
-Checkpoint、ONNX/DLC、teacher embedding cache 與資料集都刻意排除在 Git 之外。與最終成果直接相關、但只保留在本機的主要檔案包括：
+Checkpoints, ONNX/DLC files, teacher-embedding caches, and datasets are intentionally excluded from Git. The main artifacts related to the final result that may be retained locally include:
 
-- `qat_clip_visual.pth`：L/14 mixed-precision QAT checkpoint。
-- `student_checkpoint_epoch_13.pt`：H/14 teacher 蒸餾的 B/16 student checkpoint。
-- `dataset/`、`dataset_sample/images/`：本機訓練或評估資料。
+- `qat_clip_visual.pth`: L/14 mixed-precision QAT checkpoint.
+- `student_checkpoint_epoch_13.pt`: B/16 student checkpoint distilled from an H/14 teacher.
+- `dataset/` and `dataset_sample/images/`: local training or evaluation data.
 
-若要公開 checkpoint，建議使用 GitHub Release 或 Git LFS，並在 release 註明模型名稱、資料集、commit 與量化設定。
+To publish checkpoints, use a GitHub Release or Git LFS and record the model name, dataset, source commit, and quantization configuration in the release notes.
 
-## 注意事項
+## Notes
 
-- `remove_transpose.py` 處理 Linear weight QDQ 後的 `Transpose`，讓 QNN 能辨識 Fully Connected pattern。
-- text encoder 的 causal attention mask 不應直接量化 `-inf`；相關分析與驗證在 `analysis.py`、`quantize_text.py`。
-- `reports/` 是小型、可提交的量化分析結果；大型生成物仍由 `.gitignore` 排除。
+- `remove_transpose.py` folds the `Transpose` applied to a Linear weight after QDQ insertion so that QNN can recognize the Fully Connected pattern.
+- The text encoder's causal attention mask should not quantize `-inf` directly. See `analysis.py` and `quantize_text.py` for the related analysis and validation.
+- `reports/` contains small quantization-analysis outputs suitable for source control. Larger generated artifacts remain excluded by `.gitignore`.
