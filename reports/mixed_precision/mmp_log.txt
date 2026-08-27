@@ -1,0 +1,718 @@
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Mixed Precision Requests Before Preprocessing
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Layer                                                        ID         Inputs               Outputs              Params
+GraphModule.transformer.resblocks.0.attn.module_matmul       0          int8, int8           int8
+GraphModule.transformer.resblocks.0.mlp.gelu                 1          int8                 int8
+GraphModule.transformer.resblocks.1.attn.module_matmul_2     2          int8, int8           int8
+GraphModule.transformer.resblocks.1.attn.module_matmul_3     3          int8, int8           int8
+GraphModule.transformer.resblocks.1.mlp.gelu                 4          int8                 int8
+GraphModule.transformer.resblocks.1.mlp.c_fc                 5          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.mlp.c_proj               6          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.k_proj              7          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.out_proj            8          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.module_matmul_4     9          int8, int8           int8
+GraphModule.transformer.resblocks.2.attn.module_matmul_5     10         int8, int8           int8
+GraphModule.transformer.resblocks.2.mlp.gelu                 11         int8                 int8
+GraphModule.transformer.resblocks.2.mlp.c_fc                 12         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.mlp.c_proj               13         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.k_proj              14         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.out_proj            15         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.module_matmul_6     16         int8, int8           int8
+GraphModule.transformer.resblocks.3.attn.module_matmul_7     17         int8, int8           int8
+GraphModule.transformer.resblocks.3.mlp.gelu                 18         int8                 int8
+GraphModule.transformer.resblocks.3.mlp.c_fc                 19         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.mlp.c_proj               20         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.k_proj              21         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.out_proj            22         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.module_matmul_8     23         int8, int8           int8
+GraphModule.transformer.resblocks.4.attn.module_matmul_9     24         int8, int8           int8
+GraphModule.transformer.resblocks.4.mlp.gelu                 25         int8                 int8
+GraphModule.transformer.resblocks.4.mlp.c_fc                 26         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.mlp.c_proj               27         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.k_proj              28         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.out_proj            29         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.module_matmul_10    30         int8, int8           int8
+GraphModule.transformer.resblocks.5.attn.module_matmul_11    31         int8, int8           int8
+GraphModule.transformer.resblocks.5.mlp.gelu                 32         int8                 int8
+GraphModule.transformer.resblocks.5.mlp.c_fc                 33         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.mlp.c_proj               34         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.k_proj              35         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.out_proj            36         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.module_matmul_12    37         int8, int8           int8
+GraphModule.transformer.resblocks.6.attn.module_matmul_13    38         int8, int8           int8
+GraphModule.transformer.resblocks.6.mlp.gelu                 39         int8                 int8
+GraphModule.transformer.resblocks.6.mlp.c_fc                 40         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.mlp.c_proj               41         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.k_proj              42         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.out_proj            43         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.module_matmul_14    44         int8, int8           int8
+GraphModule.transformer.resblocks.7.attn.module_matmul_15    45         int8, int8           int8
+GraphModule.transformer.resblocks.7.mlp.gelu                 46         int8                 int8
+GraphModule.transformer.resblocks.7.mlp.c_fc                 47         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.mlp.c_proj               48         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.k_proj              49         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.out_proj            50         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.module_matmul_16    51         int8, int8           int8
+GraphModule.transformer.resblocks.8.attn.module_matmul_17    52         int8, int8           int8
+GraphModule.transformer.resblocks.8.mlp.gelu                 53         int8                 int8
+GraphModule.transformer.resblocks.8.mlp.c_fc                 54         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.mlp.c_proj               55         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.k_proj              56         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.out_proj            57         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.module_matmul_18    58         int8, int8           int8
+GraphModule.transformer.resblocks.9.attn.module_matmul_19    59         int8, int8           int8
+GraphModule.transformer.resblocks.9.mlp.gelu                 60         int8                 int8
+GraphModule.transformer.resblocks.9.mlp.c_fc                 61         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.mlp.c_proj               62         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.k_proj              63         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.out_proj            64         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.module_matmul_20   65         int8, int8           int8
+GraphModule.transformer.resblocks.10.attn.module_matmul_21   66         int8, int8           int8
+GraphModule.transformer.resblocks.10.mlp.gelu                67         int8                 int8
+GraphModule.transformer.resblocks.10.mlp.c_fc                68         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.mlp.c_proj              69         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.k_proj             70         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.out_proj           71         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.module_matmul_22   72         int8, int8           int8
+GraphModule.transformer.resblocks.11.attn.module_matmul_23   73         int8, int8           int8
+GraphModule.transformer.resblocks.11.mlp.gelu                74         int8                 int8
+GraphModule.transformer.resblocks.11.mlp.c_fc                75         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.mlp.c_proj              76         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.k_proj             77         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.out_proj           78         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.module_matmul_24   79         int8, int8           int8
+GraphModule.transformer.resblocks.12.attn.module_matmul_25   80         int8, int8           int8
+GraphModule.transformer.resblocks.12.mlp.gelu                81         int8                 int8
+GraphModule.transformer.resblocks.12.mlp.c_fc                82         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.mlp.c_proj              83         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.k_proj             84         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.out_proj           85         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.module_matmul_26   86         int8, int8           int8
+GraphModule.transformer.resblocks.13.attn.module_matmul_27   87         int8, int8           int8
+GraphModule.transformer.resblocks.13.mlp.gelu                88         int8                 int8
+GraphModule.transformer.resblocks.13.mlp.c_fc                89         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.mlp.c_proj              90         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.k_proj             91         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.out_proj           92         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.module_matmul_28   93         int8, int8           int8
+GraphModule.transformer.resblocks.14.attn.module_matmul_29   94         int8, int8           int8
+GraphModule.transformer.resblocks.14.mlp.gelu                95         int8                 int8
+GraphModule.transformer.resblocks.14.mlp.c_fc                96         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.mlp.c_proj              97         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.k_proj             98         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.out_proj           99         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.module_matmul_30   100        int8, int8           int8
+GraphModule.transformer.resblocks.15.attn.module_matmul_31   101        int8, int8           int8
+GraphModule.transformer.resblocks.15.mlp.gelu                102        int8                 int8
+GraphModule.transformer.resblocks.15.mlp.c_fc                103        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.mlp.c_proj              104        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.k_proj             105        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.out_proj           106        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.module_matmul_32   107        int8, int8           int8
+GraphModule.transformer.resblocks.16.attn.module_matmul_33   108        int8, int8           int8
+GraphModule.transformer.resblocks.16.mlp.gelu                109        int8                 int8
+GraphModule.transformer.resblocks.16.mlp.c_fc                110        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.mlp.c_proj              111        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.k_proj             112        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.out_proj           113        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.module_matmul_34   114        int8, int8           int8
+GraphModule.transformer.resblocks.17.attn.module_matmul_35   115        int8, int8           int8
+GraphModule.transformer.resblocks.17.mlp.gelu                116        int8                 int8
+GraphModule.transformer.resblocks.17.mlp.c_fc                117        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.mlp.c_proj              118        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.k_proj             119        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.out_proj           120        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.module_matmul_36   121        int8, int8           int8
+GraphModule.transformer.resblocks.18.attn.module_matmul_37   122        int8, int8           int8
+GraphModule.transformer.resblocks.18.mlp.gelu                123        int8                 int8
+GraphModule.transformer.resblocks.18.mlp.c_fc                124        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.mlp.c_proj              125        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.k_proj             126        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.out_proj           127        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.module_matmul_38   128        int8, int8           int8
+GraphModule.transformer.resblocks.19.attn.module_matmul_39   129        int8, int8           int8
+GraphModule.transformer.resblocks.19.mlp.gelu                130        int8                 int8
+GraphModule.transformer.resblocks.19.mlp.c_fc                131        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.mlp.c_proj              132        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.k_proj             133        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.out_proj           134        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.module_matmul_40   135        int8, int8           int8
+GraphModule.transformer.resblocks.20.attn.module_matmul_41   136        int8, int8           int8
+GraphModule.transformer.resblocks.20.mlp.gelu                137        int8                 int8
+GraphModule.transformer.resblocks.20.mlp.c_fc                138        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.mlp.c_proj              139        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.k_proj             140        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.out_proj           141        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.module_matmul_42   142        int8, int8           int8
+GraphModule.transformer.resblocks.21.attn.module_matmul_43   143        int8, int8           int8
+GraphModule.transformer.resblocks.21.mlp.gelu                144        int8                 int8
+GraphModule.transformer.resblocks.21.mlp.c_fc                145        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.mlp.c_proj              146        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.k_proj             147        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.out_proj           148        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.module_matmul_44   149        int8, int8           int8
+GraphModule.transformer.resblocks.22.attn.module_matmul_45   150        int8, int8           int8
+GraphModule.transformer.resblocks.22.mlp.gelu                151        int8                 int8
+GraphModule.transformer.resblocks.22.mlp.c_fc                152        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.mlp.c_proj              153        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.k_proj             154        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.out_proj           155        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.module_matmul_46   156        int8, int8           int8
+GraphModule.transformer.resblocks.23.attn.module_matmul_47   157        int8, int8           int8
+GraphModule.transformer.resblocks.23.mlp.gelu                158        int8                 int8
+GraphModule.transformer.resblocks.23.mlp.c_fc                159        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.mlp.c_proj              160        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.k_proj             161        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.out_proj           162        int8                 int8                 weight: int8
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Mixed Precision Requests After Preprocessing
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Layer                                                        ID         Inputs               Outputs              Params
+GraphModule.transformer.resblocks.0.attn.module_matmul       0          int8, int8           int8
+GraphModule.transformer.resblocks.0.mlp.gelu                 1          int8                 int8
+GraphModule.transformer.resblocks.1.attn.module_matmul_2     2          int8, int8           int8
+GraphModule.transformer.resblocks.1.attn.module_matmul_3     3          int8, int8           int8
+GraphModule.transformer.resblocks.1.mlp.gelu                 4          int8                 int8
+GraphModule.transformer.resblocks.1.mlp.c_fc                 5          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.mlp.c_proj               6          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.k_proj              7          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.out_proj            8          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.module_matmul_4     9          int8, int8           int8
+GraphModule.transformer.resblocks.2.attn.module_matmul_5     10         int8, int8           int8
+GraphModule.transformer.resblocks.2.mlp.gelu                 11         int8                 int8
+GraphModule.transformer.resblocks.2.mlp.c_fc                 12         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.mlp.c_proj               13         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.k_proj              14         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.out_proj            15         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.module_matmul_6     16         int8, int8           int8
+GraphModule.transformer.resblocks.3.attn.module_matmul_7     17         int8, int8           int8
+GraphModule.transformer.resblocks.3.mlp.gelu                 18         int8                 int8
+GraphModule.transformer.resblocks.3.mlp.c_fc                 19         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.mlp.c_proj               20         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.k_proj              21         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.out_proj            22         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.module_matmul_8     23         int8, int8           int8
+GraphModule.transformer.resblocks.4.attn.module_matmul_9     24         int8, int8           int8
+GraphModule.transformer.resblocks.4.mlp.gelu                 25         int8                 int8
+GraphModule.transformer.resblocks.4.mlp.c_fc                 26         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.mlp.c_proj               27         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.k_proj              28         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.out_proj            29         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.module_matmul_10    30         int8, int8           int8
+GraphModule.transformer.resblocks.5.attn.module_matmul_11    31         int8, int8           int8
+GraphModule.transformer.resblocks.5.mlp.gelu                 32         int8                 int8
+GraphModule.transformer.resblocks.5.mlp.c_fc                 33         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.mlp.c_proj               34         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.k_proj              35         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.out_proj            36         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.module_matmul_12    37         int8, int8           int8
+GraphModule.transformer.resblocks.6.attn.module_matmul_13    38         int8, int8           int8
+GraphModule.transformer.resblocks.6.mlp.gelu                 39         int8                 int8
+GraphModule.transformer.resblocks.6.mlp.c_fc                 40         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.mlp.c_proj               41         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.k_proj              42         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.out_proj            43         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.module_matmul_14    44         int8, int8           int8
+GraphModule.transformer.resblocks.7.attn.module_matmul_15    45         int8, int8           int8
+GraphModule.transformer.resblocks.7.mlp.gelu                 46         int8                 int8
+GraphModule.transformer.resblocks.7.mlp.c_fc                 47         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.mlp.c_proj               48         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.k_proj              49         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.out_proj            50         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.module_matmul_16    51         int8, int8           int8
+GraphModule.transformer.resblocks.8.attn.module_matmul_17    52         int8, int8           int8
+GraphModule.transformer.resblocks.8.mlp.gelu                 53         int8                 int8
+GraphModule.transformer.resblocks.8.mlp.c_fc                 54         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.mlp.c_proj               55         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.k_proj              56         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.out_proj            57         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.module_matmul_18    58         int8, int8           int8
+GraphModule.transformer.resblocks.9.attn.module_matmul_19    59         int8, int8           int8
+GraphModule.transformer.resblocks.9.mlp.gelu                 60         int8                 int8
+GraphModule.transformer.resblocks.9.mlp.c_fc                 61         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.mlp.c_proj               62         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.k_proj              63         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.out_proj            64         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.module_matmul_20   65         int8, int8           int8
+GraphModule.transformer.resblocks.10.attn.module_matmul_21   66         int8, int8           int8
+GraphModule.transformer.resblocks.10.mlp.gelu                67         int8                 int8
+GraphModule.transformer.resblocks.10.mlp.c_fc                68         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.mlp.c_proj              69         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.k_proj             70         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.out_proj           71         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.module_matmul_22   72         int8, int8           int8
+GraphModule.transformer.resblocks.11.attn.module_matmul_23   73         int8, int8           int8
+GraphModule.transformer.resblocks.11.mlp.gelu                74         int8                 int8
+GraphModule.transformer.resblocks.11.mlp.c_fc                75         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.mlp.c_proj              76         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.k_proj             77         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.out_proj           78         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.module_matmul_24   79         int8, int8           int8
+GraphModule.transformer.resblocks.12.attn.module_matmul_25   80         int8, int8           int8
+GraphModule.transformer.resblocks.12.mlp.gelu                81         int8                 int8
+GraphModule.transformer.resblocks.12.mlp.c_fc                82         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.mlp.c_proj              83         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.k_proj             84         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.out_proj           85         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.module_matmul_26   86         int8, int8           int8
+GraphModule.transformer.resblocks.13.attn.module_matmul_27   87         int8, int8           int8
+GraphModule.transformer.resblocks.13.mlp.gelu                88         int8                 int8
+GraphModule.transformer.resblocks.13.mlp.c_fc                89         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.mlp.c_proj              90         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.k_proj             91         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.out_proj           92         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.module_matmul_28   93         int8, int8           int8
+GraphModule.transformer.resblocks.14.attn.module_matmul_29   94         int8, int8           int8
+GraphModule.transformer.resblocks.14.mlp.gelu                95         int8                 int8
+GraphModule.transformer.resblocks.14.mlp.c_fc                96         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.mlp.c_proj              97         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.k_proj             98         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.out_proj           99         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.module_matmul_30   100        int8, int8           int8
+GraphModule.transformer.resblocks.15.attn.module_matmul_31   101        int8, int8           int8
+GraphModule.transformer.resblocks.15.mlp.gelu                102        int8                 int8
+GraphModule.transformer.resblocks.15.mlp.c_fc                103        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.mlp.c_proj              104        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.k_proj             105        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.out_proj           106        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.module_matmul_32   107        int8, int8           int8
+GraphModule.transformer.resblocks.16.attn.module_matmul_33   108        int8, int8           int8
+GraphModule.transformer.resblocks.16.mlp.gelu                109        int8                 int8
+GraphModule.transformer.resblocks.16.mlp.c_fc                110        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.mlp.c_proj              111        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.k_proj             112        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.out_proj           113        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.module_matmul_34   114        int8, int8           int8
+GraphModule.transformer.resblocks.17.attn.module_matmul_35   115        int8, int8           int8
+GraphModule.transformer.resblocks.17.mlp.gelu                116        int8                 int8
+GraphModule.transformer.resblocks.17.mlp.c_fc                117        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.mlp.c_proj              118        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.k_proj             119        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.out_proj           120        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.module_matmul_36   121        int8, int8           int8
+GraphModule.transformer.resblocks.18.attn.module_matmul_37   122        int8, int8           int8
+GraphModule.transformer.resblocks.18.mlp.gelu                123        int8                 int8
+GraphModule.transformer.resblocks.18.mlp.c_fc                124        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.mlp.c_proj              125        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.k_proj             126        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.out_proj           127        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.module_matmul_38   128        int8, int8           int8
+GraphModule.transformer.resblocks.19.attn.module_matmul_39   129        int8, int8           int8
+GraphModule.transformer.resblocks.19.mlp.gelu                130        int8                 int8
+GraphModule.transformer.resblocks.19.mlp.c_fc                131        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.mlp.c_proj              132        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.k_proj             133        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.out_proj           134        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.module_matmul_40   135        int8, int8           int8
+GraphModule.transformer.resblocks.20.attn.module_matmul_41   136        int8, int8           int8
+GraphModule.transformer.resblocks.20.mlp.gelu                137        int8                 int8
+GraphModule.transformer.resblocks.20.mlp.c_fc                138        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.mlp.c_proj              139        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.k_proj             140        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.out_proj           141        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.module_matmul_42   142        int8, int8           int8
+GraphModule.transformer.resblocks.21.attn.module_matmul_43   143        int8, int8           int8
+GraphModule.transformer.resblocks.21.mlp.gelu                144        int8                 int8
+GraphModule.transformer.resblocks.21.mlp.c_fc                145        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.mlp.c_proj              146        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.k_proj             147        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.out_proj           148        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.module_matmul_44   149        int8, int8           int8
+GraphModule.transformer.resblocks.22.attn.module_matmul_45   150        int8, int8           int8
+GraphModule.transformer.resblocks.22.mlp.gelu                151        int8                 int8
+GraphModule.transformer.resblocks.22.mlp.c_fc                152        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.mlp.c_proj              153        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.k_proj             154        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.out_proj           155        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.module_matmul_46   156        int8, int8           int8
+GraphModule.transformer.resblocks.23.attn.module_matmul_47   157        int8, int8           int8
+GraphModule.transformer.resblocks.23.mlp.gelu                158        int8                 int8
+GraphModule.transformer.resblocks.23.mlp.c_fc                159        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.mlp.c_proj              160        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.k_proj             161        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.out_proj           162        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.q_proj              7          int8                 int8                 -
+GraphModule.transformer.resblocks.1.attn.v_proj              7          int8                 int8                 -
+GraphModule.transformer.resblocks.1.attn.module_mul_3        8          int8, int8           int8                 -
+GraphModule.transformer.resblocks.2.attn.q_proj              14         int8                 int8                 -
+GraphModule.transformer.resblocks.2.attn.v_proj              14         int8                 int8                 -
+GraphModule.transformer.resblocks.2.attn.module_mul_5        15         int8, int8           int8                 -
+GraphModule.transformer.resblocks.3.attn.q_proj              21         int8                 int8                 -
+GraphModule.transformer.resblocks.3.attn.v_proj              21         int8                 int8                 -
+GraphModule.transformer.resblocks.3.attn.module_mul_7        22         int8, int8           int8                 -
+GraphModule.transformer.resblocks.4.attn.q_proj              28         int8                 int8                 -
+GraphModule.transformer.resblocks.4.attn.v_proj              28         int8                 int8                 -
+GraphModule.transformer.resblocks.4.attn.module_mul_9        29         int8, int8           int8                 -
+GraphModule.transformer.resblocks.5.attn.q_proj              35         int8                 int8                 -
+GraphModule.transformer.resblocks.5.attn.v_proj              35         int8                 int8                 -
+GraphModule.transformer.resblocks.5.attn.module_mul_11       36         int8, int8           int8                 -
+GraphModule.transformer.resblocks.6.attn.q_proj              42         int8                 int8                 -
+GraphModule.transformer.resblocks.6.attn.v_proj              42         int8                 int8                 -
+GraphModule.transformer.resblocks.6.attn.module_mul_13       43         int8, int8           int8                 -
+GraphModule.transformer.resblocks.7.attn.q_proj              49         int8                 int8                 -
+GraphModule.transformer.resblocks.7.attn.v_proj              49         int8                 int8                 -
+GraphModule.transformer.resblocks.7.attn.module_mul_15       50         int8, int8           int8                 -
+GraphModule.transformer.resblocks.8.attn.q_proj              56         int8                 int8                 -
+GraphModule.transformer.resblocks.8.attn.v_proj              56         int8                 int8                 -
+GraphModule.transformer.resblocks.8.attn.module_mul_17       57         int8, int8           int8                 -
+GraphModule.transformer.resblocks.9.attn.q_proj              63         int8                 int8                 -
+GraphModule.transformer.resblocks.9.attn.v_proj              63         int8                 int8                 -
+GraphModule.transformer.resblocks.9.attn.module_mul_19       64         int8, int8           int8                 -
+GraphModule.transformer.resblocks.10.attn.q_proj             70         int8                 int8                 -
+GraphModule.transformer.resblocks.10.attn.v_proj             70         int8                 int8                 -
+GraphModule.transformer.resblocks.10.attn.module_mul_21      71         int8, int8           int8                 -
+GraphModule.transformer.resblocks.11.attn.q_proj             77         int8                 int8                 -
+GraphModule.transformer.resblocks.11.attn.v_proj             77         int8                 int8                 -
+GraphModule.transformer.resblocks.11.attn.module_mul_23      78         int8, int8           int8                 -
+GraphModule.transformer.resblocks.12.attn.q_proj             84         int8                 int8                 -
+GraphModule.transformer.resblocks.12.attn.v_proj             84         int8                 int8                 -
+GraphModule.transformer.resblocks.12.attn.module_mul_25      85         int8, int8           int8                 -
+GraphModule.transformer.resblocks.13.attn.q_proj             91         int8                 int8                 -
+GraphModule.transformer.resblocks.13.attn.v_proj             91         int8                 int8                 -
+GraphModule.transformer.resblocks.13.attn.module_mul_27      92         int8, int8           int8                 -
+GraphModule.transformer.resblocks.14.attn.q_proj             98         int8                 int8                 -
+GraphModule.transformer.resblocks.14.attn.v_proj             98         int8                 int8                 -
+GraphModule.transformer.resblocks.14.attn.module_mul_29      99         int8, int8           int8                 -
+GraphModule.transformer.resblocks.15.attn.q_proj             105        int8                 int8                 -
+GraphModule.transformer.resblocks.15.attn.v_proj             105        int8                 int8                 -
+GraphModule.transformer.resblocks.15.attn.module_mul_31      106        int8, int8           int8                 -
+GraphModule.transformer.resblocks.16.attn.q_proj             112        int8                 int8                 -
+GraphModule.transformer.resblocks.16.attn.v_proj             112        int8                 int8                 -
+GraphModule.transformer.resblocks.16.attn.module_mul_33      113        int8, int8           int8                 -
+GraphModule.transformer.resblocks.17.attn.q_proj             119        int8                 int8                 -
+GraphModule.transformer.resblocks.17.attn.v_proj             119        int8                 int8                 -
+GraphModule.transformer.resblocks.17.attn.module_mul_35      120        int8, int8           int8                 -
+GraphModule.transformer.resblocks.18.attn.q_proj             126        int8                 int8                 -
+GraphModule.transformer.resblocks.18.attn.v_proj             126        int8                 int8                 -
+GraphModule.transformer.resblocks.18.attn.module_mul_37      127        int8, int8           int8                 -
+GraphModule.transformer.resblocks.19.attn.q_proj             133        int8                 int8                 -
+GraphModule.transformer.resblocks.19.attn.v_proj             133        int8                 int8                 -
+GraphModule.transformer.resblocks.19.attn.module_mul_39      134        int8, int8           int8                 -
+GraphModule.transformer.resblocks.20.attn.q_proj             140        int8                 int8                 -
+GraphModule.transformer.resblocks.20.attn.v_proj             140        int8                 int8                 -
+GraphModule.transformer.resblocks.20.attn.module_mul_41      141        int8, int8           int8                 -
+GraphModule.transformer.resblocks.21.attn.q_proj             147        int8                 int8                 -
+GraphModule.transformer.resblocks.21.attn.v_proj             147        int8                 int8                 -
+GraphModule.transformer.resblocks.21.attn.module_mul_43      148        int8, int8           int8                 -
+GraphModule.transformer.resblocks.22.attn.q_proj             154        int8                 int8                 -
+GraphModule.transformer.resblocks.22.attn.v_proj             154        int8                 int8                 -
+GraphModule.transformer.resblocks.22.attn.module_mul_45      155        int8, int8           int8                 -
+GraphModule.transformer.resblocks.23.attn.q_proj             161        int8                 int8                 -
+GraphModule.transformer.resblocks.23.attn.v_proj             161        int8                 int8                 -
+GraphModule.transformer.resblocks.23.attn.module_mul_47      162        int8, int8           int8                 -
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Mixed Precision Requests After Propagation
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Layer                                                        ID         Inputs               Outputs              Params
+GraphModule.transformer.resblocks.0.attn.module_matmul       0          int8, int8           int8
+GraphModule.transformer.resblocks.0.mlp.gelu                 1          int8                 int8
+GraphModule.transformer.resblocks.1.attn.module_matmul_2     2          int8, int8           int8
+GraphModule.transformer.resblocks.1.attn.module_matmul_3     3          int8, int8           int8
+GraphModule.transformer.resblocks.1.mlp.gelu                 4          int8                 int8
+GraphModule.transformer.resblocks.1.mlp.c_fc                 5          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.mlp.c_proj               6          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.k_proj              7          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.out_proj            8          int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.module_matmul_4     9          int8, int8           int8
+GraphModule.transformer.resblocks.2.attn.module_matmul_5     10         int8, int8           int8
+GraphModule.transformer.resblocks.2.mlp.gelu                 11         int8                 int8
+GraphModule.transformer.resblocks.2.mlp.c_fc                 12         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.mlp.c_proj               13         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.k_proj              14         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.2.attn.out_proj            15         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.module_matmul_6     16         int8, int8           int8
+GraphModule.transformer.resblocks.3.attn.module_matmul_7     17         int8, int8           int8
+GraphModule.transformer.resblocks.3.mlp.gelu                 18         int8                 int8
+GraphModule.transformer.resblocks.3.mlp.c_fc                 19         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.mlp.c_proj               20         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.k_proj              21         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.3.attn.out_proj            22         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.module_matmul_8     23         int8, int8           int8
+GraphModule.transformer.resblocks.4.attn.module_matmul_9     24         int8, int8           int8
+GraphModule.transformer.resblocks.4.mlp.gelu                 25         int8                 int8
+GraphModule.transformer.resblocks.4.mlp.c_fc                 26         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.mlp.c_proj               27         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.k_proj              28         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.4.attn.out_proj            29         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.module_matmul_10    30         int8, int8           int8
+GraphModule.transformer.resblocks.5.attn.module_matmul_11    31         int8, int8           int8
+GraphModule.transformer.resblocks.5.mlp.gelu                 32         int8                 int8
+GraphModule.transformer.resblocks.5.mlp.c_fc                 33         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.mlp.c_proj               34         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.k_proj              35         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.5.attn.out_proj            36         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.module_matmul_12    37         int8, int8           int8
+GraphModule.transformer.resblocks.6.attn.module_matmul_13    38         int8, int8           int8
+GraphModule.transformer.resblocks.6.mlp.gelu                 39         int8                 int8
+GraphModule.transformer.resblocks.6.mlp.c_fc                 40         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.mlp.c_proj               41         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.k_proj              42         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.6.attn.out_proj            43         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.module_matmul_14    44         int8, int8           int8
+GraphModule.transformer.resblocks.7.attn.module_matmul_15    45         int8, int8           int8
+GraphModule.transformer.resblocks.7.mlp.gelu                 46         int8                 int8
+GraphModule.transformer.resblocks.7.mlp.c_fc                 47         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.mlp.c_proj               48         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.k_proj              49         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.7.attn.out_proj            50         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.module_matmul_16    51         int8, int8           int8
+GraphModule.transformer.resblocks.8.attn.module_matmul_17    52         int8, int8           int8
+GraphModule.transformer.resblocks.8.mlp.gelu                 53         int8                 int8
+GraphModule.transformer.resblocks.8.mlp.c_fc                 54         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.mlp.c_proj               55         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.k_proj              56         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.8.attn.out_proj            57         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.module_matmul_18    58         int8, int8           int8
+GraphModule.transformer.resblocks.9.attn.module_matmul_19    59         int8, int8           int8
+GraphModule.transformer.resblocks.9.mlp.gelu                 60         int8                 int8
+GraphModule.transformer.resblocks.9.mlp.c_fc                 61         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.mlp.c_proj               62         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.k_proj              63         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.9.attn.out_proj            64         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.module_matmul_20   65         int8, int8           int8
+GraphModule.transformer.resblocks.10.attn.module_matmul_21   66         int8, int8           int8
+GraphModule.transformer.resblocks.10.mlp.gelu                67         int8                 int8
+GraphModule.transformer.resblocks.10.mlp.c_fc                68         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.mlp.c_proj              69         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.k_proj             70         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.10.attn.out_proj           71         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.module_matmul_22   72         int8, int8           int8
+GraphModule.transformer.resblocks.11.attn.module_matmul_23   73         int8, int8           int8
+GraphModule.transformer.resblocks.11.mlp.gelu                74         int8                 int8
+GraphModule.transformer.resblocks.11.mlp.c_fc                75         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.mlp.c_proj              76         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.k_proj             77         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.11.attn.out_proj           78         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.module_matmul_24   79         int8, int8           int8
+GraphModule.transformer.resblocks.12.attn.module_matmul_25   80         int8, int8           int8
+GraphModule.transformer.resblocks.12.mlp.gelu                81         int8                 int8
+GraphModule.transformer.resblocks.12.mlp.c_fc                82         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.mlp.c_proj              83         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.k_proj             84         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.12.attn.out_proj           85         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.module_matmul_26   86         int8, int8           int8
+GraphModule.transformer.resblocks.13.attn.module_matmul_27   87         int8, int8           int8
+GraphModule.transformer.resblocks.13.mlp.gelu                88         int8                 int8
+GraphModule.transformer.resblocks.13.mlp.c_fc                89         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.mlp.c_proj              90         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.k_proj             91         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.13.attn.out_proj           92         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.module_matmul_28   93         int8, int8           int8
+GraphModule.transformer.resblocks.14.attn.module_matmul_29   94         int8, int8           int8
+GraphModule.transformer.resblocks.14.mlp.gelu                95         int8                 int8
+GraphModule.transformer.resblocks.14.mlp.c_fc                96         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.mlp.c_proj              97         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.k_proj             98         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.14.attn.out_proj           99         int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.module_matmul_30   100        int8, int8           int8
+GraphModule.transformer.resblocks.15.attn.module_matmul_31   101        int8, int8           int8
+GraphModule.transformer.resblocks.15.mlp.gelu                102        int8                 int8
+GraphModule.transformer.resblocks.15.mlp.c_fc                103        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.mlp.c_proj              104        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.k_proj             105        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.15.attn.out_proj           106        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.module_matmul_32   107        int8, int8           int8
+GraphModule.transformer.resblocks.16.attn.module_matmul_33   108        int8, int8           int8
+GraphModule.transformer.resblocks.16.mlp.gelu                109        int8                 int8
+GraphModule.transformer.resblocks.16.mlp.c_fc                110        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.mlp.c_proj              111        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.k_proj             112        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.16.attn.out_proj           113        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.module_matmul_34   114        int8, int8           int8
+GraphModule.transformer.resblocks.17.attn.module_matmul_35   115        int8, int8           int8
+GraphModule.transformer.resblocks.17.mlp.gelu                116        int8                 int8
+GraphModule.transformer.resblocks.17.mlp.c_fc                117        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.mlp.c_proj              118        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.k_proj             119        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.17.attn.out_proj           120        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.module_matmul_36   121        int8, int8           int8
+GraphModule.transformer.resblocks.18.attn.module_matmul_37   122        int8, int8           int8
+GraphModule.transformer.resblocks.18.mlp.gelu                123        int8                 int8
+GraphModule.transformer.resblocks.18.mlp.c_fc                124        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.mlp.c_proj              125        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.k_proj             126        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.18.attn.out_proj           127        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.module_matmul_38   128        int8, int8           int8
+GraphModule.transformer.resblocks.19.attn.module_matmul_39   129        int8, int8           int8
+GraphModule.transformer.resblocks.19.mlp.gelu                130        int8                 int8
+GraphModule.transformer.resblocks.19.mlp.c_fc                131        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.mlp.c_proj              132        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.k_proj             133        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.19.attn.out_proj           134        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.module_matmul_40   135        int8, int8           int8
+GraphModule.transformer.resblocks.20.attn.module_matmul_41   136        int8, int8           int8
+GraphModule.transformer.resblocks.20.mlp.gelu                137        int8                 int8
+GraphModule.transformer.resblocks.20.mlp.c_fc                138        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.mlp.c_proj              139        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.k_proj             140        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.20.attn.out_proj           141        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.module_matmul_42   142        int8, int8           int8
+GraphModule.transformer.resblocks.21.attn.module_matmul_43   143        int8, int8           int8
+GraphModule.transformer.resblocks.21.mlp.gelu                144        int8                 int8
+GraphModule.transformer.resblocks.21.mlp.c_fc                145        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.mlp.c_proj              146        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.k_proj             147        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.21.attn.out_proj           148        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.module_matmul_44   149        int8, int8           int8
+GraphModule.transformer.resblocks.22.attn.module_matmul_45   150        int8, int8           int8
+GraphModule.transformer.resblocks.22.mlp.gelu                151        int8                 int8
+GraphModule.transformer.resblocks.22.mlp.c_fc                152        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.mlp.c_proj              153        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.k_proj             154        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.22.attn.out_proj           155        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.module_matmul_46   156        int8, int8           int8
+GraphModule.transformer.resblocks.23.attn.module_matmul_47   157        int8, int8           int8
+GraphModule.transformer.resblocks.23.mlp.gelu                158        int8                 int8
+GraphModule.transformer.resblocks.23.mlp.c_fc                159        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.mlp.c_proj              160        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.k_proj             161        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.23.attn.out_proj           162        int8                 int8                 weight: int8
+GraphModule.transformer.resblocks.1.attn.q_proj              7          int8                 int8                 -
+GraphModule.transformer.resblocks.1.attn.v_proj              7          int8                 int8                 -
+GraphModule.transformer.resblocks.1.attn.module_mul_3        8          int8, int8           int8                 -
+GraphModule.transformer.resblocks.2.attn.q_proj              14         int8                 int8                 -
+GraphModule.transformer.resblocks.2.attn.v_proj              14         int8                 int8                 -
+GraphModule.transformer.resblocks.2.attn.module_mul_5        15         int8, int8           int8                 -
+GraphModule.transformer.resblocks.3.attn.q_proj              21         int8                 int8                 -
+GraphModule.transformer.resblocks.3.attn.v_proj              21         int8                 int8                 -
+GraphModule.transformer.resblocks.3.attn.module_mul_7        22         int8, int8           int8                 -
+GraphModule.transformer.resblocks.4.attn.q_proj              28         int8                 int8                 -
+GraphModule.transformer.resblocks.4.attn.v_proj              28         int8                 int8                 -
+GraphModule.transformer.resblocks.4.attn.module_mul_9        29         int8, int8           int8                 -
+GraphModule.transformer.resblocks.5.attn.q_proj              35         int8                 int8                 -
+GraphModule.transformer.resblocks.5.attn.v_proj              35         int8                 int8                 -
+GraphModule.transformer.resblocks.5.attn.module_mul_11       36         int8, int8           int8                 -
+GraphModule.transformer.resblocks.6.attn.q_proj              42         int8                 int8                 -
+GraphModule.transformer.resblocks.6.attn.v_proj              42         int8                 int8                 -
+GraphModule.transformer.resblocks.6.attn.module_mul_13       43         int8, int8           int8                 -
+GraphModule.transformer.resblocks.7.attn.q_proj              49         int8                 int8                 -
+GraphModule.transformer.resblocks.7.attn.v_proj              49         int8                 int8                 -
+GraphModule.transformer.resblocks.7.attn.module_mul_15       50         int8, int8           int8                 -
+GraphModule.transformer.resblocks.8.attn.q_proj              56         int8                 int8                 -
+GraphModule.transformer.resblocks.8.attn.v_proj              56         int8                 int8                 -
+GraphModule.transformer.resblocks.8.attn.module_mul_17       57         int8, int8           int8                 -
+GraphModule.transformer.resblocks.9.attn.q_proj              63         int8                 int8                 -
+GraphModule.transformer.resblocks.9.attn.v_proj              63         int8                 int8                 -
+GraphModule.transformer.resblocks.9.attn.module_mul_19       64         int8, int8           int8                 -
+GraphModule.transformer.resblocks.10.attn.q_proj             70         int8                 int8                 -
+GraphModule.transformer.resblocks.10.attn.v_proj             70         int8                 int8                 -
+GraphModule.transformer.resblocks.10.attn.module_mul_21      71         int8, int8           int8                 -
+GraphModule.transformer.resblocks.11.attn.q_proj             77         int8                 int8                 -
+GraphModule.transformer.resblocks.11.attn.v_proj             77         int8                 int8                 -
+GraphModule.transformer.resblocks.11.attn.module_mul_23      78         int8, int8           int8                 -
+GraphModule.transformer.resblocks.12.attn.q_proj             84         int8                 int8                 -
+GraphModule.transformer.resblocks.12.attn.v_proj             84         int8                 int8                 -
+GraphModule.transformer.resblocks.12.attn.module_mul_25      85         int8, int8           int8                 -
+GraphModule.transformer.resblocks.13.attn.q_proj             91         int8                 int8                 -
+GraphModule.transformer.resblocks.13.attn.v_proj             91         int8                 int8                 -
+GraphModule.transformer.resblocks.13.attn.module_mul_27      92         int8, int8           int8                 -
+GraphModule.transformer.resblocks.14.attn.q_proj             98         int8                 int8                 -
+GraphModule.transformer.resblocks.14.attn.v_proj             98         int8                 int8                 -
+GraphModule.transformer.resblocks.14.attn.module_mul_29      99         int8, int8           int8                 -
+GraphModule.transformer.resblocks.15.attn.q_proj             105        int8                 int8                 -
+GraphModule.transformer.resblocks.15.attn.v_proj             105        int8                 int8                 -
+GraphModule.transformer.resblocks.15.attn.module_mul_31      106        int8, int8           int8                 -
+GraphModule.transformer.resblocks.16.attn.q_proj             112        int8                 int8                 -
+GraphModule.transformer.resblocks.16.attn.v_proj             112        int8                 int8                 -
+GraphModule.transformer.resblocks.16.attn.module_mul_33      113        int8, int8           int8                 -
+GraphModule.transformer.resblocks.17.attn.q_proj             119        int8                 int8                 -
+GraphModule.transformer.resblocks.17.attn.v_proj             119        int8                 int8                 -
+GraphModule.transformer.resblocks.17.attn.module_mul_35      120        int8, int8           int8                 -
+GraphModule.transformer.resblocks.18.attn.q_proj             126        int8                 int8                 -
+GraphModule.transformer.resblocks.18.attn.v_proj             126        int8                 int8                 -
+GraphModule.transformer.resblocks.18.attn.module_mul_37      127        int8, int8           int8                 -
+GraphModule.transformer.resblocks.19.attn.q_proj             133        int8                 int8                 -
+GraphModule.transformer.resblocks.19.attn.v_proj             133        int8                 int8                 -
+GraphModule.transformer.resblocks.19.attn.module_mul_39      134        int8, int8           int8                 -
+GraphModule.transformer.resblocks.20.attn.q_proj             140        int8                 int8                 -
+GraphModule.transformer.resblocks.20.attn.v_proj             140        int8                 int8                 -
+GraphModule.transformer.resblocks.20.attn.module_mul_41      141        int8, int8           int8                 -
+GraphModule.transformer.resblocks.21.attn.q_proj             147        int8                 int8                 -
+GraphModule.transformer.resblocks.21.attn.v_proj             147        int8                 int8                 -
+GraphModule.transformer.resblocks.21.attn.module_mul_43      148        int8, int8           int8                 -
+GraphModule.transformer.resblocks.22.attn.q_proj             154        int8                 int8                 -
+GraphModule.transformer.resblocks.22.attn.v_proj             154        int8                 int8                 -
+GraphModule.transformer.resblocks.22.attn.module_mul_45      155        int8, int8           int8                 -
+GraphModule.transformer.resblocks.23.attn.q_proj             161        int8                 int8                 -
+GraphModule.transformer.resblocks.23.attn.v_proj             161        int8                 int8                 -
+GraphModule.transformer.resblocks.23.attn.module_mul_47      162        int8, int8           int8                 -
+GraphModule.transformer.resblocks.0.attn.q_proj              None       -                    int8                 -
+GraphModule.transformer.resblocks.0.attn.k_proj              None       -                    int8                 -
+GraphModule.transformer.resblocks.0.mlp.c_fc                 None       -                    int8                 -
+GraphModule.transformer.resblocks.1.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.1.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.1.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.2.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.2.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.2.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.3.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.3.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.3.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.4.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.4.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.4.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.5.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.5.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.5.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.6.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.6.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.6.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.7.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.7.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.7.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.8.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.8.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.8.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.9.ln_1                     None       -                    int8                 -
+GraphModule.transformer.resblocks.9.attn.softmax             None       -                    int8                 -
+GraphModule.transformer.resblocks.9.ln_2                     None       -                    int8                 -
+GraphModule.transformer.resblocks.10.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.10.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.10.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.11.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.11.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.11.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.12.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.12.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.12.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.13.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.13.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.13.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.14.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.14.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.14.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.15.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.15.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.15.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.16.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.16.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.16.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.17.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.17.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.17.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.18.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.18.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.18.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.19.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.19.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.19.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.20.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.20.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.20.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.21.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.21.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.21.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.22.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.22.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.22.ln_2                    None       -                    int8                 -
+GraphModule.transformer.resblocks.23.ln_1                    None       -                    int8                 -
+GraphModule.transformer.resblocks.23.attn.softmax            None       -                    int8                 -
+GraphModule.transformer.resblocks.23.ln_2                    None       -                    int8                 -

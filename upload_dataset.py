@@ -21,7 +21,7 @@ def load_images_from_folder(folder_path, target_size=(224, 224)):
     return [process_image(path, target_size) for path in image_paths]
 
 # TODO: Define image folder path
-image_folder = "dataset/images"  # change to your folder
+image_folder = "dataset_sample/images"  # change to your folder
 
 # Process images
 input_image = load_images_from_folder(image_folder)
@@ -35,7 +35,7 @@ print(f"First image shape: {input_image[0].shape}")  # Should be (1, 3, 224, 224
 print(qai_hub.upload_dataset({"image": input_image}))
 
 # TODO: Load txt CSV
-csv_path = "dataset/txt_list.csv"
+csv_path = "dataset_sample/txt_list.csv"
 df = pd.read_csv(csv_path)
 
 # Get unique text prompts in order from the second column, drop NaN

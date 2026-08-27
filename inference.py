@@ -20,6 +20,8 @@ def parse_ground_truth(txt_list, img_list):
     df_img = pd.read_csv(img_list)
     df_txt = pd.read_csv(txt_list)
 
+    df_img = df_img.sort_values(by='Image_names')
+
     # Get unique text prompts in order from the second column
     txt_id = df_txt.iloc[:, 0].dropna().astype(np.int16).tolist()
     gt = df_img.iloc[:, 1].dropna().tolist() # list of txt id for each image
@@ -90,12 +92,12 @@ device = qai_hub.Device("XR2 Gen 2 (Proxy)")
 # TODO: Define tasks with their corresponding compiled job IDs and dataset IDs
 tasks = {
     "text": {
-        "compiled_id": "",
-        "dataset_id": ""
+        "compiled_id": "jgkd8w3vp",
+        "dataset_id": "d9vp3kk59"
     },
     "image": {
-        "compiled_id": "",
-        "dataset_id": ""
+        "compiled_id": "jp0k68l05",
+        "dataset_id": "d7oz1qqw9"
     }
 }
 
@@ -125,5 +127,5 @@ for task_name, info in tasks.items():
 text_output = outputs["text"]
 image_output = outputs["image"]
 
-result = evaluate_track1(image_output, text_output, "dataset/txt_list.csv", "dataset/img_list.csv")
+result = evaluate_track1(image_output, text_output, "dataset_sample/txt_list.csv", "dataset_sample/img_list.csv")
 print(result)

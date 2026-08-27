@@ -1,19 +1,27 @@
 [project]
 name = "2026lpcvc-track1"
 version = "0.1.0"
-description = "Add your description here"
+description = "Quantization, distillation, and QNN deployment for LPCVC 2026 Track 1 image-text retrieval"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "clip",
+    "matplotlib",
     "numpy>=2.2.6",
+    "onnx",
+    "onnxruntime",
     "onnxscript>=0.6.2",
+    "open-clip-torch",
     "pandas>=2.2.3",
+    "pillow",
     "qai-hub>=0.45.0",
     "qai-hub-models>=0.46.1",
+    "requests",
     "scikit-learn>=1.7.2",
     "setuptools==81.0.0",
     "torch>=2.8.0",
+    "torchvision",
+    "tqdm",
     "transformers>=4.57.6",
 ]
 
