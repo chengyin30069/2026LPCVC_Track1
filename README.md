@@ -1,5 +1,7 @@
 # 2026 LPCVC Track 1 — Efficient Image–Text Retrieval
 
+**Image-retrieval demo:** [lpcv-image-retrieval-demo](https://github.com/yyh-603/lpcv-image-retrieval-demo)
+
 This repository contains the code used for the final project: mixed-precision quantization and quantization-aware training (QAT) for a CLIP image encoder, H/14-teacher-to-B/16-student distillation, and compilation, profiling, and Recall@10 evaluation on Qualcomm QAI Hub and the QNN HTP backend.
 
 ## Final Pipelines
