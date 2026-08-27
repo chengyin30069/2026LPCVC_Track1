@@ -1,121 +1,62 @@
-# LPCVC 2026 Track 1 - Image-to-Text Retrieval Sample Solution
+# 2026 LPCVC Track 1 — Efficient Image–Text Retrieval
 
-## For Submissions
+This repository contains the code used for the final project: mixed-precision quantization and quantization-aware training (QAT) for a CLIP image encoder, H/14-teacher-to-B/16-student distillation, and compilation, profiling, and Recall@10 evaluation on Qualcomm QAI Hub and the QNN HTP backend.
 
-Check out [this repo](https://github.com/lpcvai/25LPCVC_AIHub_Guide) for more details on how to run models on AIHub.
+## Final Pipelines
 
-## Overview
+1. **L/14 mixed-precision QAT:** Start from W8A16, assign A8 to sensitive operators, and fine-tune with a cosine feature loss.
+2. **H/14 → B/16 distillation:** Train the student with precomputed teacher image and text embeddings using feature-distillation and contrastive/ICL-style losses.
+3. **QNN deployment:** Export ONNX, fix QDQ graph patterns, compile to a QNN DLC through QAI Hub, and profile on the XR2 Gen 2 (Proxy) device.
 
-This repository contains Python scripts designed to extract, compile, and profile the OpenAI-CLIP's image and text encoders using the `qai_hub` library. It also includes scripts for uploading datasets and running inference with evaluation metrics such as Recall@10.
+See [docs/CODE_ORGANIZATION.md](docs/CODE_ORGANIZATION.md) for a complete classification of the primary pipeline, supporting tools, and archived experiments.
 
-## **Table of Contents**
-
-1. [Features](#features)
-2. [Requirements](#requirements)
-3. [Installation](#installation)
-4. [Usage](#usage)
-
----
-
-## **Features**
-
-* **Preprocessing Scripts**: Includes resizing and normalization for image inputs, and tokenization for text inputs.
-* Extract CLIP Encoders: Extract image and text encoders from OpenAI-CLIP model and export as ONNX models.
-* **Model Compilation**: Supports compiling the model for a specific target device using QAI Hub.
-* **Model Profiling**: Submit and retrieve profiling results via QAI Hub.
-* **Dataset Upload**: Upload image and text datasets to AI Hub for inference.
-* **Inference & Evaluation**: Run inference on datasets and compute metrics such as Recall@10.
-
----
-
-## **Requirements**
-
-* Python 3.9+
-* Torch and torchvision
-* QAI Hub
-* Required packages listed in `requirements.txt`
-
----
-
-## **Installation**
-
-### **Step 1: Clone the Repository**
+## Environment
 
 ```bash
-git clone https://github.com/lpcvai/26LPCVC_Track1_Sample_Solution.git
-cd 26LPCVC_Track1_Sample_Solution
-```
-
-### **Step 2: Install Dependencies**
-
-Ensure you have Python 3.9+ installed. Install the required Python packages:
-
-```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## uv Installation
+The quantization scripts also require a Qualcomm AIMET release compatible with the installed PyTorch version. AIMET is intentionally not pinned in `requirements.txt` to avoid installing an incompatible build; install it separately according to the official AIMET instructions.
 
-### Init
-
-```bash
-uv init --python 3.10
-```
-
-### Package
+## Common Entry Points
 
 ```bash
-uv add -r requirements.txt --no-build-isolation
-```
+# Distillation training
+python train_student_distill.py --help
 
+# Export the distilled student and text encoder to ONNX
+python export_onnx.py --help
 
----
+# Export the L/14 W8A16 QDQ ONNX model and encodings
+python export_quantized_onnx.py --help
 
-## **Usage**
+# L/14 mixed-precision QAT
+python mixed_qat.py
 
-### **1. Export ONNX Models**
+# Compile and profile through QAI Hub
+python compile_and_profile.py --help
 
-Execute the script to export the encoders as ONNX models:
-
-```bash
-python export_onnx.py
-```
-
-### **2. Compile and Profile**
-
-```bash
-python compile_and_profile.py
-```
-
-This script will:
-
-* Upload the ONNX models to AI Hub and submit a compile job.
-* Submit a profiling job with the compiled models.
-
-### **3. Upload Dataset**
-
-Before running inference, datasets must be uploaded to AI Hub using `upload_dataset.py`. This script handles:
-
-* Formatting images and text data into the structure expected by QAI Hub. (image: (1,3,224,224), txt: (1,77))
-* Uploading the dataset and returning a dataset ID to be used in inference scripts.
-
-```bash
+# Upload evaluation inputs and calculate retrieval metrics
 python upload_dataset.py
-```
-
-This will print a `dataset_id` that you can use in `inference.py`.
-
-### **4. Run Inference and Evaluate**
-
-The `inference.py` script runs the compiled models on the uploaded datasets:
-
-1. Retrieves the compiled image and text encoders from AI Hub.
-2. Runs inference on the uploaded datasets.
-3. Collects output embeddings for images and text.
-4. Computes evaluation metrics, such as **Recall@10**, which measures how often the correct text is among the top-10 retrieved results for each image.
-
-```bash
 python inference.py
 ```
 
-After completion, the script prints the Recall@10 score for the dataset.
+`upload_dataset.py` and `inference.py` currently use configuration values defined in the source files. Set the local data paths and QAI Hub job/dataset IDs before running them.
+
+## Models and Data
+
+Checkpoints, ONNX/DLC files, teacher-embedding caches, and datasets are intentionally excluded from Git. The main artifacts related to the final result that may be retained locally include:
+
+- `qat_clip_visual.pth`: L/14 mixed-precision QAT checkpoint.
+- `student_checkpoint_epoch_13.pt`: B/16 student checkpoint distilled from an H/14 teacher.
+- `dataset/` and `dataset_sample/images/`: local training or evaluation data.
+
+To publish checkpoints, use a GitHub Release or Git LFS and record the model name, dataset, source commit, and quantization configuration in the release notes.
+
+## Notes
+
+- `remove_transpose.py` folds the `Transpose` applied to a Linear weight after QDQ insertion so that QNN can recognize the Fully Connected pattern.
+- The text encoder's causal attention mask should not quantize `-inf` directly. See `analysis.py` and `quantize_text.py` for the related analysis and validation.
+- `reports/` contains small quantization-analysis outputs suitable for source control. Larger generated artifacts remain excluded by `.gitignore`.

@@ -1,7 +1,36 @@
-exported_onnx/
-dataset/
-ids.txt
+# Python / local environments
+__pycache__/
+*.py[cod]
 .python-version
-main.py
-# pyproject.toml
+.venv/
 uv.lock
+
+# Local credentials and run IDs
+ids.txt
+.env
+
+# Datasets are prepared locally and are not part of the source repository.
+dataset/
+dataset_sample/images/
+
+# Generated model artifacts. Publish selected final checkpoints separately or
+# use Git LFS instead of committing multi-GB binaries to the source repository.
+exported_onnx/
+artifacts/
+*.onnx
+*.onnx.data
+*.data
+*.dlc
+*.pt
+*.pth
+*.pth.tar
+*.npz
+*.npy
+
+# Local experiment output directories retained only for backward compatibility.
+H14-quant/
+aimet_mixed_quant_image/
+torch_smoothquant/
+
+# One-off local entry point from the original sample repository.
+main.py
